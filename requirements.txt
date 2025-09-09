@@ -1,0 +1,12 @@
+pandas>=2.2.2
+numpy>=1.26.0
+yfinance>=0.2.36
+matplotlib>=3.8.0
+scikit-learn>=1.4.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+flask>=3.0.0
+gunicorn>=21.0.0
+pytz>=2023.3
+colorama>=0.4.6
+psutil>=5.9.0
