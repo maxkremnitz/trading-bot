@@ -2056,14 +2056,19 @@ def dashboard():
         )
         
     except Exception as e:
-        logger.error(f"❌ Dashboard Fehler: {e}\n{traceback.format_exc()}")
+        logger.error(f"Dashboard Fehler: {e}\n{traceback.format_exc()}")
         return f"""
-        <h1>🚨 Dashboard Fehler</h1>
+        <html>
+        <head><title>Dashboard Error</title></head>
+        <body>
+        <h1>⚠️ Dashboard Fehler</h1>
         <p><strong>Fehler:</strong> {str(e)}</p>
         <p><strong>Zeit:</strong> {datetime.now()}</p>
         <hr>
         <p>Prüfe die Logs für weitere Details.</p>
         <a href="/">Dashboard neu laden</a>
+        </body>
+        </html>
         """, 500
 
 @app.route("/api/status")
