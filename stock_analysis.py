@@ -22,6 +22,7 @@ import sqlite3
 from contextlib import contextmanager
 import warnings
 warnings.filterwarnings('ignore')
+
 load_dotenv()
 
 # Logging Setup
@@ -38,13 +39,14 @@ logger = logging.getLogger(__name__)
 # RATE LIMITER
 class RateLimiter:
     """Capital.com API Rate Limiter - 10 req/sec, 1 req/0.1sec für Trading"""
+    
     def __init__(self):
         self.general_requests = []
         self.trading_requests = []
         self.session_requests = []
         self.lock = threading.Lock()
         logger.info("Rate Limiter initialisiert")
-    
+
     def can_make_request(self, request_type="general"):
         """Prüft ob Request gemacht werden darf"""
         with self.lock:
@@ -68,7 +70,7 @@ class RateLimiter:
                     return False, 1.0 - (now - self.general_requests[0])
                 self.general_requests.append(now)
             return True, 0
-    
+
     def wait_if_needed(self, request_type="general"):
         """Wartet falls Rate Limit erreicht"""
         can_proceed, wait_time = self.can_make_request(request_type)
@@ -79,6 +81,7 @@ class RateLimiter:
 # TRADING HOURS MANAGER
 class TradingHoursManager:
     """Handelszeitenbeschränkungen - KOMPLETT STOPP außerhalb Handelszeiten"""
+    
     def __init__(self):
         self.market_hours = {
             'NYSE': {
@@ -101,7 +104,7 @@ class TradingHoursManager:
             }
         }
         logger.info("Trading Hours Manager initialisiert")
-    
+
     def is_market_open(self, market='NYSE'):
         """Prüft ob Markt geöffnet ist"""
         try:
@@ -129,13 +132,13 @@ class TradingHoursManager:
                     is_open = True
             else:
                 is_open = open_time <= current_time <= close_time
-                
+            
             status = f"{market} {'OFFEN' if is_open else 'GESCHLOSSEN'}"
             return is_open, status
         except Exception as e:
             logger.error(f"Marktzeit-Prüfung Fehler: {e}")
             return False, "Zeitprüfung fehlgeschlagen"
-    
+
     def get_trading_status(self):
         """Umfassender Trading-Status für beide Strategien"""
         nyse_open, nyse_status = self.is_market_open('NYSE')
@@ -158,7 +161,7 @@ class TradingHoursManager:
             'forex_status': forex_status,
             'next_open_time': self.get_next_market_open() if not any_market_open else None
         }
-    
+
     def get_next_market_open(self):
         """Berechnet nächste Marktöffnung"""
         try:
@@ -167,6 +170,7 @@ class TradingHoursManager:
                 next_time = self._get_next_open_time(market)
                 if next_time:
                     next_times.append((market, next_time))
+            
             if next_times:
                 next_times.sort(key=lambda x: x[1])
                 market, next_time = next_times[0]
@@ -179,7 +183,7 @@ class TradingHoursManager:
         except Exception as e:
             logger.error(f"Nächste Marktöffnung Fehler: {e}")
             return None
-    
+
     def _get_next_open_time(self, market):
         """Berechnet nächste Öffnungszeit für spezifischen Markt"""
         try:
@@ -194,6 +198,7 @@ class TradingHoursManager:
                 minute=market_info['open_time'].minute,
                 second=0, microsecond=0
             )
+            
             if (now_market.weekday() in market_info['weekdays'] and
                 now_market.time() < market_info['open_time']):
                 return today_open.astimezone(pytz.UTC)
@@ -210,6 +215,7 @@ class TradingHoursManager:
                     )
                     return next_open.astimezone(pytz.UTC)
                 days_ahead += 1
+            
             return None
         except Exception as e:
             logger.error(f"Nächste Öffnungszeit für {market}: {e}")
@@ -249,16 +255,18 @@ def safe_round(value, decimals=2):
 # DATABASE MANAGER
 class DatabaseManager:
     """SQLite Datenbank für Trade-History und Persistierung"""
+    
     def __init__(self, db_path="trading_bot.db"):
         self.db_path = db_path
         self.init_database()
         logger.info("Database Manager initialisiert")
-    
+
     def init_database(self):
         """Datenbank und Tabellen erstellen"""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute("PRAGMA journal_mode=WAL")
+                
                 # Analysis History
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS analysis_history (
@@ -275,6 +283,7 @@ class DatabaseManager:
                         account_type TEXT
                     )
                 """)
+                
                 # Trade History
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS trades (
@@ -294,6 +303,7 @@ class DatabaseManager:
                         result TEXT
                     )
                 """)
+                
                 # Trading Sessions
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS sessions (
@@ -307,11 +317,12 @@ class DatabaseManager:
                         status TEXT DEFAULT 'active'
                     )
                 """)
+                
                 conn.commit()
                 logger.info("Datenbank-Tabellen erstellt/geprüft")
         except Exception as e:
             logger.error(f"Datenbank-Initialisierung Fehler: {e}")
-    
+
     @contextmanager
     def get_connection(self):
         """Sichere Datenbankverbindung"""
@@ -327,7 +338,7 @@ class DatabaseManager:
         finally:
             if conn:
                 conn.close()
-    
+
     @safe_execute
     def save_analysis(self, ticker, data, strategy="main", account_type="demo"):
         """Analyse-Daten speichern"""
@@ -353,7 +364,7 @@ class DatabaseManager:
                     conn.commit()
         except Exception as e:
             logger.error(f"Analyse-Speicherung Fehler: {e}")
-    
+
     @safe_execute
     def save_trade(self, trade_data):
         """Trade-Daten speichern"""
@@ -383,7 +394,7 @@ class DatabaseManager:
                     conn.commit()
         except Exception as e:
             logger.error(f"Trade-Speicherung Fehler: {e}")
-    
+
     @safe_execute
     def get_recent_trades(self, limit=10):
         """Letzte Trades abrufen"""
@@ -403,6 +414,7 @@ class DatabaseManager:
 # CAPITAL.COM API CLIENT
 class CapitalComAPI:
     """Capital.com API Client mit Dual-Account Support"""
+    
     def __init__(self, rate_limiter, account_type="main"):
         self.api_key = os.getenv('CAPITAL_API_KEY')
         self.password = os.getenv('CAPITAL_PASSWORD')
@@ -410,7 +422,7 @@ class CapitalComAPI:
         self.account_type = account_type
         self.rate_limiter = rate_limiter
         
-        # URLs
+        # URLs gemäß Capital.com API Dokumentation
         self.base_url = "https://demo-api-capital.backend-capital.com"
         
         # Session Tokens
@@ -431,14 +443,15 @@ class CapitalComAPI:
             'SAP.DE': 'SAP', 'DTE.DE': 'DTE',
             'GOLD': 'GOLD', 'SILVER': 'SILVER', 'GLD': 'GOLD', 'SLV': 'SILVER'
         }
+        
         logger.info(f"Capital.com API initialisiert (Account: {account_type})")
-    
+
     def is_authenticated(self):
         """Prüft Session-Status"""
         if not self.cst_token or not self.security_token:
             return False
         return (time.time() - self.last_auth_time) < self.auth_timeout
-    
+
     @safe_execute
     def authenticate(self):
         """Session erstellen mit Rate Limiting"""
@@ -458,6 +471,7 @@ class CapitalComAPI:
                 'X-CAP-API-KEY': self.api_key,
                 'Content-Type': 'application/json'
             }
+            
             data = {
                 'identifier': self.email,
                 'password': self.password,
@@ -478,6 +492,7 @@ class CapitalComAPI:
                 
                 if self.cst_token and self.security_token:
                     self.last_auth_time = time.time()
+                    
                     # Account-Informationen laden
                     session_data = response.json()
                     self.available_accounts = session_data.get('accounts', [])
@@ -504,13 +519,14 @@ class CapitalComAPI:
                     logger.error("Ungültige Credentials - prüfe API Key und Password")
                 elif response.status_code == 429:
                     logger.error("Rate Limit erreicht - warte vor nächstem Versuch")
+        
         except requests.exceptions.RequestException as e:
             logger.error(f"API Verbindungsfehler: {e}")
         except Exception as e:
             logger.error(f"Authentifizierung Fehler: {e}")
         
         return False
-    
+
     @safe_execute
     def switch_account(self, target_account_type="demo1"):
         """Account wechseln (Demo Account 1 vs Standard Demo)"""
@@ -562,7 +578,7 @@ class CapitalComAPI:
             logger.error(f"Account-Wechsel Fehler: {e}")
         
         return False
-    
+
     @safe_execute
     def get_positions(self):
         """Aktuelle Positionen abrufen"""
@@ -588,7 +604,7 @@ class CapitalComAPI:
             logger.error(f"Positionen-Abruf Fehler: {e}")
         
         return []
-    
+
     @safe_execute
     def place_order(self, ticker, direction, size=0.1, stop_distance=None, profit_distance=None):
         """Order platzieren mit Deal Confirmation"""
@@ -647,7 +663,7 @@ class CapitalComAPI:
             logger.error(f"Order-Fehler für {epic}: {e}")
         
         return None
-    
+
     @safe_execute
     def check_deal_confirmation(self, deal_reference):
         """Deal Confirmation prüfen"""
@@ -665,9 +681,11 @@ class CapitalComAPI:
                 confirmation = response.json()
                 deal_status = confirmation.get('dealStatus', 'UNKNOWN')
                 deal_id = confirmation.get('dealId')
+                
                 logger.info(f"Deal Confirmation: {deal_status}")
                 if deal_id:
                     logger.info(f"Deal ID: {deal_id}")
+                
                 return confirmation
             else:
                 logger.warning(f"Confirmation nicht verfügbar: {response.status_code}")
@@ -675,49 +693,28 @@ class CapitalComAPI:
             logger.error(f"Deal Confirmation Fehler: {e}")
         
         return None
-    
-    @safe_execute
-    def check_deal_confirmation(self, deal_reference):
-        """Deal Confirmation prüfen"""
-        try:
-            self.rate_limiter.wait_if_needed("general")
-            headers = self._get_auth_headers()
-            response = requests.get(
-                f"{self.base_url}/api/v1/confirms/{deal_reference}",
-                headers=headers,
-                timeout=10
-            )
-            if response.status_code == 200:
-                confirmation = response.json()
-                deal_status = confirmation.get('dealStatus', 'UNKNOWN')
-                deal_id = confirmation.get('dealId')
-                logger.info(f"Deal Confirmation: {deal_status}")
-                if deal_id:
-                    logger.info(f"Deal ID: {deal_id}")
-                return confirmation
-            else:
-                logger.warning(f"Confirmation nicht verfügbar: {response.status_code}")
-        except Exception as e:
-            logger.error(f"Deal Confirmation Fehler: {e}")
-        return None
 
-    @safe_execute  # ← KORRIGIERT: Richtige Einrückung
+    @safe_execute
     def get_account_info(self):
         """Account-Informationen abrufen"""
         if not self.is_authenticated():
             return None
+        
         try:
             self.rate_limiter.wait_if_needed("general")
             headers = self._get_auth_headers()
+            
             response = requests.get(
                 f"{self.base_url}/api/v1/accounts",
                 headers=headers,
                 timeout=10
             )
+            
             if response.status_code == 200:
                 return response.json()
         except Exception as e:
             logger.error(f"Account-Info Fehler: {e}")
+        
         return None
 
     def _get_auth_headers(self):
@@ -749,19 +746,34 @@ class CapitalComAPI:
 class MainTradingStrategy:
     """Haupt-Trading-Strategie basierend auf deinem ursprünglichen Code"""
     
-    def __init__(self):  # ← KORRIGIERT: __init__ statt **init**
+    def __init__(self):
         self.name = "Main Strategy"
         self.stocks_data = {}
         self.data_lock = threading.Lock()
         logger.info(f"{self.name} initialisiert")
-    
+
+    def get_stock_list(self):
+        """Standard-Aktienliste"""
+        return [
+            {"Name": "Apple Inc.", "Ticker": "AAPL", "Currency": "USD"},
+            {"Name": "Microsoft Corporation", "Ticker": "MSFT", "Currency": "USD"},
+            {"Name": "Amazon.com Inc.", "Ticker": "AMZN", "Currency": "USD"},
+            {"Name": "Tesla Inc.", "Ticker": "TSLA", "Currency": "USD"},
+            {"Name": "NVIDIA Corporation", "Ticker": "NVDA", "Currency": "USD"},
+            {"Name": "Alphabet Inc.", "Ticker": "GOOGL", "Currency": "USD"},
+            {"Name": "Meta Platforms Inc.", "Ticker": "META", "Currency": "USD"},
+            {"Name": "Netflix Inc.", "Ticker": "NFLX", "Currency": "USD"},
+            {"Name": "SAP SE", "Ticker": "SAP.DE", "Currency": "EUR"},
+            {"Name": "Deutsche Telekom AG", "Ticker": "DTE.DE", "Currency": "EUR"}
+        ]
+
     @safe_execute
     def fetch_historical_data(self, period="1y"):
         """Historische Daten laden"""
         stocks_list = self.get_stock_list()
         logger.info(f"Lade Daten für {len(stocks_list)} Aktien...")
-        success_count = 0
         
+        success_count = 0
         for stock in stocks_list:
             ticker = stock["Ticker"]
             try:
@@ -778,6 +790,7 @@ class MainTradingStrategy:
                     current_price = 0.0
                     if 'Close' in data.columns and len(data['Close'].dropna()) > 0:
                         current_price = float(data['Close'].dropna().iloc[-1])
+                    
                     current_price = max(0.01, current_price)
                     
                     stock_info = stock.copy()
@@ -799,7 +812,7 @@ class MainTradingStrategy:
         
         logger.info(f"Daten geladen: {success_count}/{len(stocks_list)} erfolgreich")
         return success_count > 0
-    
+
     @safe_execute
     def calculate_technical_indicators(self):
         """Technische Indikatoren berechnen"""
@@ -848,6 +861,7 @@ class MainTradingStrategy:
                             macd = ema12 - ema26
                             macd_signal = macd.ewm(span=9, adjust=False).mean()
                             macd_histogram = macd - macd_signal
+                            
                             technical["MACD"] = safe_round(macd.iloc[-1])
                             technical["MACD_Signal"] = safe_round(macd_signal.iloc[-1])
                             technical["MACD_Histogram"] = safe_round(macd_histogram.iloc[-1])
@@ -865,6 +879,7 @@ class MainTradingStrategy:
                         if len(historical_data) >= 20:
                             days = np.arange(1, min(31, len(historical_data) + 1))
                             prices = historical_data['Close'].iloc[-len(days):].values
+                            
                             if len(prices) == len(days) and not np.any(np.isnan(prices)):
                                 model = LinearRegression()
                                 model.fit(days.reshape(-1, 1), prices)
@@ -888,6 +903,7 @@ class MainTradingStrategy:
                             if len(returns_clean) > 0:
                                 daily_vol = returns_clean.std() * 100
                                 technical["Volatility"] = safe_round(daily_vol, 2)
+                                
                                 if daily_vol < 1.0:
                                     technical["Volatility_Rating"] = "Very Low"
                                 elif daily_vol < 1.5:
@@ -909,12 +925,13 @@ class MainTradingStrategy:
                         technical["Volatility_Rating"] = "Medium"
                     
                     self.stocks_data[ticker]["Technical"] = technical
+                    
                 except Exception as e:
                     logger.error(f"Technische Analyse Fehler für {ticker}: {e}")
         
         logger.info("Technische Indikatoren berechnet")
         return True
-    
+
     @safe_execute
     def generate_trade_signals(self):
         """Trade-Signale generieren basierend auf deinem Scoring-System"""
@@ -941,6 +958,7 @@ class MainTradingStrategy:
                     # Trend Factor
                     trend_slope = technical.get("Trend_Slope", 0.0)
                     trend_strength = technical.get("Trend_Strength", 0.0)
+                    
                     if trend_strength > 0.8:
                         if trend_slope > 0:
                             score += 20  # Strong uptrend
@@ -975,6 +993,7 @@ class MainTradingStrategy:
                     # Moving Average Factor
                     price_vs_ma20 = technical.get("Price_vs_MA20", 0.0)
                     price_vs_ma50 = technical.get("Price_vs_MA50", 0.0)
+                    
                     if price_vs_ma20 > 3 and price_vs_ma50 > 2:
                         score += 10  # Above moving averages
                     elif price_vs_ma20 < -3 and price_vs_ma50 < -2:
@@ -983,6 +1002,7 @@ class MainTradingStrategy:
                     # Volatility Factor
                     volatility = technical.get("Volatility", 2.0)
                     vol_rating = technical.get("Volatility_Rating", "Medium")
+                    
                     if vol_rating in ["High", "Very High"]:
                         score += 5  # High volatility can be profitable
                     elif vol_rating == "Medium":
@@ -1045,8 +1065,10 @@ class MainTradingStrategy:
                             'strategy': self.name,
                             'reason': f"Score: {score:.1f}, RSI: {rsi:.1f}, Trend: {trend_slope:.4f}"
                         }
+                        
                         signals.append(signal)
                         logger.info(f"{ticker}: {action} Signal (Score: {score:.1f}, Confidence: {confidence:.0f}%)")
+                
                 except Exception as e:
                     logger.error(f"Signal-Generierung Fehler für {ticker}: {e}")
         
@@ -1056,12 +1078,13 @@ class MainTradingStrategy:
 # GOLD/SILVER STRATEGY
 class GoldSilverStrategy:
     """Gold/Silver Test-Strategie für Demo Account 1"""
+    
     def __init__(self):
         self.name = "Gold/Silver Test Strategy"
         self.cache = {}
         self.cache_timeout = 300  # 5 Minuten Cache
         logger.info(f"{self.name} initialisiert")
-    
+
     @safe_execute
     def get_simulated_prices(self):
         """Simulierte Gold/Silber Preise (ohne externe API-Calls)"""
@@ -1076,6 +1099,7 @@ class GoldSilverStrategy:
         # Zufällige Schwankungen simulieren
         gold_variation = (np.random.random() - 0.5) * 40  # ±20
         silver_variation = (np.random.random() - 0.5) * 4  # ±2
+        
         gold_change = (np.random.random() - 0.5) * 4  # ±2%
         silver_change = (np.random.random() - 0.5) * 6  # ±3%
         
@@ -1097,8 +1121,9 @@ class GoldSilverStrategy:
         # Cache aktualisieren
         self.cache['prices'] = prices
         self.cache['timestamp'] = now
+        
         return prices
-    
+
     @safe_execute
     def analyze_silver_trend(self):
         """Vereinfachte Silber-Trend-Analyse für Gold-Signale"""
@@ -1126,7 +1151,7 @@ class GoldSilverStrategy:
         except Exception as e:
             logger.error(f"Silber-Trend Analyse Fehler: {e}")
             return None
-    
+
     @safe_execute
     def generate_gold_trade_signal(self):
         """Gold Trade-Signal basierend auf Silber-Korrelation"""
@@ -1135,11 +1160,14 @@ class GoldSilverStrategy:
             prices = self.get_simulated_prices()
             if not prices:
                 return None
+            
             # Silber-Analyse
             silver_analysis = self.analyze_silver_trend()
             if not silver_analysis:
                 return None
+            
             signal = None
+            
             # SELL GOLD Signal: Silber stark gestiegen (inverse Korrelation)
             if (silver_analysis['trend_direction'] == 'up' and
                 silver_analysis['total_change_pct'] > 1.0):
@@ -1152,6 +1180,7 @@ class GoldSilverStrategy:
                     'confidence': confidence,
                     'strategy': self.name
                 }
+            
             # BUY GOLD Signal: Silber gefallen in 24h
             elif silver_analysis['change_24h_pct'] < -0.5:
                 confidence = min(100, abs(silver_analysis['change_24h_pct']) * 30)
@@ -1163,6 +1192,7 @@ class GoldSilverStrategy:
                     'confidence': confidence,
                     'strategy': self.name
                 }
+            
             # HOLD: Keine signifikanten Bewegungen
             else:
                 signal = {
@@ -1173,21 +1203,26 @@ class GoldSilverStrategy:
                     'confidence': 0,
                     'strategy': self.name
                 }
+            
             # Trading-Parameter hinzufügen für BUY/SELL
             if signal and signal['action'] in ['BUY', 'SELL']:
                 gold_price = prices['gold']['current']
+                
                 # Konservative Parameter für Test-Trades
                 sl_percent = 1.0  # 1% Stop Loss
                 tp_percent = 2.0  # 2% Take Profit
+                
                 if signal['action'] == 'BUY':
                     stop_loss = gold_price * (1 - sl_percent/100)
                     take_profit = gold_price * (1 + tp_percent/100)
                 else:  # SELL
                     stop_loss = gold_price * (1 + sl_percent/100)
                     take_profit = gold_price * (1 - tp_percent/100)
+                
                 # Capital.com API Parameter
                 stop_distance = max(10, int(abs(gold_price - stop_loss)))
                 profit_distance = max(10, int(abs(take_profit - gold_price)))
+                
                 signal.update({
                     'current_price': gold_price,
                     'stop_loss': stop_loss,
@@ -1197,7 +1232,9 @@ class GoldSilverStrategy:
                     'position_size': 0.05,  # Kleine Test-Position
                     'silver_analysis': silver_analysis
                 })
+            
             return signal
+            
         except Exception as e:
             logger.error(f"Gold Signal Generierung Fehler: {e}")
             return None
@@ -1220,7 +1257,7 @@ class GoldSilverStrategy:
 class TradingBotController:
     """Haupt-Controller für das Dual-Strategy Trading System"""
     
-    def __init__(self):  # ← KORRIGIERT: __init__ statt **init**
+    def __init__(self):
         self.start_time = datetime.now()
         self.running = False
         self.update_thread = None
@@ -1253,6 +1290,7 @@ class TradingBotController:
             'active_positions': [],
             'recent_trades': []
         }
+        
         logger.info("Trading Bot Controller initialisiert")
 
     @safe_execute
@@ -1284,6 +1322,7 @@ class TradingBotController:
                 logger.error("Haupt-API Initialisierung fehlgeschlagen")
         except Exception as e:
             logger.error(f"API Initialisierung Fehler: {e}")
+        
         return False
 
     def is_trading_allowed(self):
@@ -1339,7 +1378,7 @@ class TradingBotController:
                 if current_time - self.last_update_time >= self.update_interval:
                     if self.is_trading_allowed():
                         logger.info("Führe Trading-Analyse durch...")
-                        self.run_analysis_cycle()  # Ihre bestehende Methode verwenden
+                        self.run_analysis_cycle()
                         self.last_update_time = current_time
                     else:
                         logger.info("Trading außerhalb der Handelszeiten - warte...")
@@ -1352,573 +1391,6 @@ class TradingBotController:
                 self.error_count += 1
                 time.sleep(60)  # Bei Fehler länger warten
 
-    def get_comprehensive_status(self):
-        """Umfassender Status für Dashboard - FEHLENDE METHODE"""
-        try:
-            # APIs Status
-            main_api_status = "Connected" if (self.main_api and self.main_api.is_authenticated()) else "Disconnected"
-            gold_api_status = "Connected" if (self.gold_api and self.gold_api.is_authenticated()) else "Disconnected"
-            
-            # Laufzeit berechnen
-            uptime_seconds = (datetime.now() - self.start_time).total_seconds()
-            uptime_hours = uptime_seconds / 3600
-            
-            # Trading Hours Status
-            trading_status = self.trading_hours.get_trading_status()
-            
-            # Gold/Silver Preise (falls verfügbar)
-            try:
-                gold_silver_prices = self.gold_silver_strategy.get_current_prices()
-            except:
-                gold_silver_prices = {}
-            
-            return {
-                "timestamp": datetime.now().isoformat(),
-                "status": "running" if self.running else "stopped",
-                "uptime_hours": round(uptime_hours, 2),
-                "apis": {
-                    "main_api": main_api_status,
-                    "gold_api": gold_api_status
-                },
-                "trading_hours": trading_status,
-                "statistics": {
-                    "analysis_count": self.analysis_count,
-                    "trade_count": self.trade_count,
-                    "error_count": self.error_count,
-                    "last_update": self.current_status.get('last_analysis', 'Never'),
-                    "next_update_in": max(0, self.update_interval - (time.time() - self.last_update_time))
-                },
-                "strategies": {
-                    "main_strategy": {
-                        "name": self.main_strategy.name,
-                        "status": "active" if main_api_status == "Connected" else "inactive"
-                    },
-                    "gold_silver_strategy": {
-                        "name": self.gold_silver_strategy.name,
-                        "status": "active" if gold_api_status == "Connected" else "inactive",
-                        "current_prices": gold_silver_prices
-                    }
-                },
-                "positions": self.current_status.get('active_positions', []),
-                "recent_trades": self.current_status.get('recent_trades', [])
-            }
-            
-        except Exception as e:
-            logger.error(f"Status-Abruf Fehler: {e}")
-            return {
-                "status": "error",
-                "message": str(e),
-                "timestamp": datetime.now().isoformat()
-            }
-    
-@safe_execute
-def run_analysis_cycle(self):
-    """Kompletter Analyse- und Trading-Zyklus"""
-    logger.info("Starte Analyse-Zyklus...")
-    
-    # Handelszeitenbeschränkung prüfen
-    if not self.is_trading_allowed():
-        logger.info("Außerhalb der Handelszeiten - Analyse übersprungen")
-        return False
-    
-    # === AUTO-RECONNECT HINZUFÜGEN ===
-    # API Sessions prüfen und bei Bedarf erneuern
-    try:
-        if self.main_api:
-            if not self.main_api.ensure_authenticated():
-                logger.error("Hauptstrategie API Reconnect fehlgeschlagen")
-        
-        if self.gold_api:
-            if not self.gold_api.ensure_authenticated():
-                logger.error("Gold/Silver API Reconnect fehlgeschlagen")
-        
-        logger.info("API Sessions geprüft/erneuert")
-    except Exception as e:
-        logger.error(f"API Reconnect Fehler: {e}")
-    
-    # === REST DER METHODE BLEIBT GLEICH ===
-    try:
-        analysis_success = False
-        
-        # Hauptstrategie-Analyse
-        if self.current_status['trading_hours'].get('main_strategy_trading', False):
-            logger.info("Führe Hauptstrategie-Analyse durch...")
-            
-            # Daten laden und analysieren
-            if self.main_strategy.fetch_historical_data():
-                if self.main_strategy.calculate_technical_indicators():
-                    # Trade-Signale generieren
-                    main_signals = self.main_strategy.generate_trade_signals()
-                    
-                    # Analyse-Daten speichern
-                    for ticker, stock_data in self.main_strategy.stocks_data.items():
-                        technical = stock_data.get("Technical", {})
-                        info = stock_data.get("Info", {})
-                        
-                        self.database.save_analysis(ticker, {
-                            'price': info.get('CurrentPrice', 0),
-                            'score': 50,  # Placeholder
-                            'rating': 'Analyzed',
-                            'rsi': technical.get('RSI', 0),
-                            'macd': technical.get('MACD_Histogram', 0),
-                            'volatility': technical.get('Volatility', 0)
-                        }, strategy="main", account_type="demo")
-                    
-                    # Trading ausführen
-                    if main_signals and self.main_api:
-                        main_trades = self.execute_main_strategy_trades(main_signals)
-                        self.current_status['recent_trades'].extend(main_trades)
-                    
-                    analysis_success = True
-                    logger.info(f"Hauptstrategie-Analyse abgeschlossen: {len(main_signals)} Signale")
-        
-        # Gold/Silver-Strategie
-        if self.current_status['trading_hours'].get('gold_silver_trading', False):
-            logger.info("Führe Gold/Silver-Strategie durch...")
-            
-            gold_signal = self.gold_silver_strategy.generate_gold_trade_signal()
-            if gold_signal:
-                # Gold/Silver Trading ausführen
-                if gold_signal['action'] in ['BUY', 'SELL'] and self.gold_api:
-                    gold_trades = self.execute_gold_silver_trades([gold_signal])
-                    self.current_status['recent_trades'].extend(gold_trades)
-                
-                analysis_success = True
-                logger.info(f"Gold/Silver-Strategie: {gold_signal['action']} Signal")
-        
-        # Aktuelle Positionen aktualisieren
-        self.update_positions()
-        
-        if analysis_success:
-            self.analysis_count += 1
-            self.last_update_time = time.time()
-            self.current_status['last_analysis'] = datetime.now().isoformat()
-            
-            # === ERWEITERTE LOGS ===
-            next_analysis = datetime.now() + timedelta(minutes=self.update_interval//60)
-            logger.info(f"✅ Analyse-Zyklus #{self.analysis_count} abgeschlossen")
-            logger.info(f"📅 Nächste Analyse geplant: {next_analysis.strftime('%H:%M:%S')}")
-            logger.info(f"🔗 API Status - Main: {'OK' if self.main_api and self.main_api.is_authenticated() else 'FAIL'}, Gold: {'OK' if self.gold_api and self.gold_api.is_authenticated() else 'FAIL'}")
-            
-            return True
-        else:
-            logger.warning("Keine Analyse durchgeführt (Märkte geschlossen)")
-            return False
-    
-    except Exception as e:
-        logger.error(f"Analyse-Zyklus Fehler: {e}")
-        self.error_count += 1
-        return False
-    @safe_execute
-    def execute_main_strategy_trades(self, signals):
-        """Hauptstrategie-Trades ausführen"""
-        executed_trades = []
-        
-        if not self.main_api or not self.main_api.is_authenticated():
-            logger.error("Haupt-API nicht verfügbar für Trading")
-            return executed_trades
-        
-        # Auf Standard Demo Account sicherstellen
-        self.main_api.switch_account("main")
-        
-        for signal in signals[:3]:  # Max 3 Trades pro Zyklus
-            try:
-                logger.info(f"Ausführung Hauptstrategie: {signal['ticker']} {signal['action']}")
-                
-                result = self.main_api.place_order(
-                    ticker=signal['ticker'],
-                    direction=signal['action'],
-                    size=signal['position_size'],
-                    stop_distance=signal['stop_distance'],
-                    profit_distance=signal['profit_distance']
-                )
-                
-                if result:
-                    trade_data = {
-                        'ticker': signal['ticker'],
-                        'action': signal['action'],
-                        'score': signal['score'],
-                        'position_size': signal['position_size'],
-                        'stop_loss': signal['stop_loss'],
-                        'take_profit': signal['take_profit'],
-                        'status': 'executed',
-                        'deal_reference': result.get('dealReference', ''),
-                        'deal_id': result.get('confirmation', {}).get('dealId', ''),
-                        'account_type': 'demo_main',
-                        'strategy': 'main',
-                        'result': result
-                    }
-                    
-                    self.database.save_trade(trade_data)
-                    executed_trades.append(trade_data)
-                    self.trade_count += 1
-                    
-                    logger.info(f"Hauptstrategie Trade erfolgreich: {signal['ticker']} {signal['action']}")
-                else:
-                    logger.error(f"Hauptstrategie Trade fehlgeschlagen: {signal['ticker']}")
-                
-                # Pause zwischen Trades (Rate Limiting)
-                time.sleep(1)
-                
-            except Exception as e:
-                logger.error(f"Hauptstrategie Trade Fehler für {signal['ticker']}: {e}")
-        
-        logger.info(f"Hauptstrategie: {len(executed_trades)} Trades ausgeführt")
-        return executed_trades
-    
-    @safe_execute
-    def execute_gold_silver_trades(self, signals):
-        """Gold/Silver-Trades ausführen"""
-        executed_trades = []
-        
-        if not self.gold_api or not self.gold_api.is_authenticated():
-            logger.error("Gold/Silver-API nicht verfügbar für Trading")
-            return executed_trades
-        
-        # Auf Demo Account 1 sicherstellen
-        self.gold_api.switch_account("demo1")
-        
-        for signal in signals[:1]:  # Max 1 Gold/Silver Trade pro Zyklus
-            try:
-                if signal['action'] == 'HOLD':
-                    logger.info(f"Gold/Silver HOLD: {signal['reason']}")
-                    continue
-                
-                logger.info(f"Ausführung Gold/Silver: {signal['ticker']} {signal['action']}")
-                
-                result = self.gold_api.place_order(
-                    ticker=signal['ticker'],
-                    direction=signal['action'],
-                    size=signal['position_size'],
-                    stop_distance=signal['stop_distance'],
-                    profit_distance=signal['profit_distance']
-                )
-                
-                if result:
-                    trade_data = {
-                        'ticker': signal['ticker'],
-                        'action': signal['action'],
-                        'score': signal['confidence'],
-                        'position_size': signal['position_size'],
-                        'stop_loss': signal['stop_loss'],
-                        'take_profit': signal['take_profit'],
-                        'status': 'executed',
-                        'deal_reference': result.get('dealReference', ''),
-                        'deal_id': result.get('confirmation', {}).get('dealId', ''),
-                        'account_type': 'demo_account1',
-                        'strategy': 'gold_silver',
-                        'result': result
-                    }
-                    
-                    self.database.save_trade(trade_data)
-                    executed_trades.append(trade_data)
-                    self.trade_count += 1
-                    
-                    logger.info(f"Gold/Silver Trade erfolgreich: {signal['reason']}")
-                    logger.info(f"Confidence: {signal['confidence']:.0f}%")
-                else:
-                    logger.error(f"Gold/Silver Trade fehlgeschlagen")
-                
-            except Exception as e:
-                logger.error(f"Gold/Silver Trade Fehler: {e}")
-        
-        logger.info(f"Gold/Silver: {len(executed_trades)} Trades ausgeführt")
-        return executed_trades
-    
-    @safe_execute
-    def update_positions(self):
-        """Aktuelle Positionen von beiden Accounts abrufen"""
-        all_positions = []
-        
-        try:
-            # Hauptstrategie Positionen
-            if self.main_api and self.main_api.is_authenticated():
-                self.main_api.switch_account("main")
-                main_positions = self.main_api.get_positions()
-                for pos in main_positions:
-                    pos['account_type'] = 'demo_main'
-                    pos['strategy'] = 'main'
-                all_positions.extend(main_positions)
-            
-            # Gold/Silver Positionen
-            if self.gold_api and self.gold_api.is_authenticated():
-                self.gold_api.switch_account("demo1")
-                gold_positions = self.gold_api.get_positions()
-                for pos in gold_positions:
-                    pos['account_type'] = 'demo_account1'
-                    pos['strategy'] = 'gold_silver'
-                all_positions.extend(gold_positions)
-            
-            self.current_status['active_positions'] = all_positions
-            
-        except Exception as e:
-            logger.error(f"Positionen-Update Fehler: {e}")
-    
-    def start_auto_trading(self):
-        """Automatisches Trading starten"""
-        if self.running:
-            logger.warning("Auto-Trading bereits aktiv")
-            return False
-        
-        # APIs initialisieren
-        if not self.initialize_apis():
-            logger.error("API-Initialisierung fehlgeschlagen - Auto-Trading nicht gestartet")
-            return False
-        
-        self.running = True
-        
-        def trading_loop():
-            logger.info(f"Auto-Trading gestartet (Update-Intervall: {self.update_interval//60} Minuten)")
-            
-            # Erste Analyse nach 30 Sekunden
-            time.sleep(30)
-            
-            while self.running:
-                try:
-                    success = self.run_analysis_cycle()
-                    
-                    if success:
-                        logger.info(f"Nächste Analyse in {self.update_interval//60} Minuten")
-                    else:
-                        logger.info(f"Nächste Prüfung in {self.update_interval//60} Minuten")
-                    
-                    # Warten bis zum nächsten Zyklus
-                    sleep_start = time.time()
-                    while self.running and (time.time() - sleep_start) < self.update_interval:
-                        time.sleep(60)  # Jede Minute prüfen
-                
-                except Exception as e:
-                    logger.error(f"Trading-Loop Fehler: {e}")
-                    if self.running:
-                        time.sleep(300)  # 5 Minuten warten bei Fehlern
-            
-            logger.info("Auto-Trading gestoppt")
-        
-        self.update_thread = threading.Thread(target=trading_loop, daemon=True)
-        self.update_thread.start()
-        
-        logger.info("Auto-Trading Thread gestartet")
-        return True
-    
-    def stop_auto_trading(self):
-        """Automatisches Trading stoppen"""
-        if self.running:
-            logger.info("Stoppe Auto-Trading...")
-            self.running = False
-            if self.update_thread and self.update_thread.is_alive():
-                self.update_thread.join(timeout=5)
-            logger.info("Auto-Trading gestoppt")
-    
-    def get_comprehensive_status(self):
-        """Umfassender Status für Dashboard"""
-        runtime_hours = (datetime.now() - self.start_time).total_seconds() / 3600
-        
-        # Account-Balances
-        main_balance = "N/A"
-        gold_balance = "N/A"
-        
-        try:
-            if self.main_api and self.main_api.is_authenticated():
-                main_info = self.main_api.get_account_info()
-                if main_info and 'accounts' in main_info:
-                    for acc in main_info['accounts']:
-                        if acc.get('accountId') == self.main_api.current_account:
-                            main_balance = f"{acc.get('balance', {}).get('balance', 0):.2f}"
-                            break
-            
-            if self.gold_api and self.gold_api.is_authenticated():
-                gold_info = self.gold_api.get_account_info()
-                if gold_info and 'accounts' in gold_info:
-                    for acc in gold_info['accounts']:
-                        if acc.get('accountId') == self.gold_api.current_account:
-                            gold_balance = f"{acc.get('balance', {}).get('balance', 0):.2f}"
-                            break
-        except Exception as e:
-            logger.error(f"Balance-Abruf Fehler: {e}")
-        
-        # Gold/Silver Preise
-        gold_silver_prices = self.gold_silver_strategy.get_current_prices()
-        
-        # Recent Trades begrenzen
-        self.current_status['recent_trades'] = self.current_status['recent_trades'][-10:]
-        
-        return {
-            'running': self.running,
-            'start_time': self.start_time.isoformat(),
-            'runtime_hours': round(runtime_hours, 2),
-            'last_update': datetime.fromtimestamp(self.last_update_time).isoformat() if self.last_update_time else None,
-            'update_interval_minutes': self.update_interval // 60,
-            'analysis_count': self.analysis_count,
-            'trade_count': self.trade_count,
-            'error_count': self.error_count,
-            'success_rate': round((self.analysis_count / max(1, self.analysis_count + self.error_count)) * 100, 1),
-            
-            # Trading Status
-            'trading_hours': self.current_status['trading_hours'],
-            'active_positions': len(self.current_status['active_positions']),
-            'recent_trades': self.current_status['recent_trades'],
-            
-            # Account Informationen
-            'main_api_connected': self.main_api is not None and self.main_api.is_authenticated(),
-            'gold_api_connected': self.gold_api is not None and self.gold_api.is_authenticated(),
-            'main_account_balance': main_balance,
-            'gold_account_balance': gold_balance,
-            
-            # Market Data
-            'gold_silver_prices': gold_silver_prices,
-            
-            # Strategien
-            'strategies': {
-                'main_strategy_active': self.current_status['trading_hours'].get('main_strategy_trading', False),
-                'gold_silver_active': self.current_status['trading_hours'].get('gold_silver_trading', False)
-            }
-        }
-    
-    # === HIER DIE NEUEN METHODEN HINZUFÜGEN ===
-    
-    def start_auto_trading(self):
-        """Automatisches Trading starten"""
-        if self.running:
-            logger.warning("Auto-Trading bereits aktiv")
-            return False
-        
-        # APIs initialisieren
-        if not self.initialize_apis():
-            logger.error("API-Initialisierung fehlgeschlagen - Auto-Trading nicht gestartet")
-            return False
-        
-        self.running = True
-        
-        def trading_loop():
-            logger.info(f"Auto-Trading gestartet (Update-Intervall: {self.update_interval//60} Minuten)")
-            
-            # Erste Analyse nach 30 Sekunden
-            time.sleep(30)
-            
-            while self.running:
-                try:
-                    success = self.run_analysis_cycle()
-                    
-                    if success:
-                        logger.info(f"Nächste Analyse in {self.update_interval//60} Minuten")
-                    else:
-                        logger.info(f"Nächste Prüfung in {self.update_interval//60} Minuten")
-                    
-                    # Warten bis zum nächsten Zyklus
-                    sleep_start = time.time()
-                    while self.running and (time.time() - sleep_start) < self.update_interval:
-                        time.sleep(60)  # Jede Minute prüfen
-                
-                except Exception as e:
-                    logger.error(f"Trading-Loop Fehler: {e}")
-                    if self.running:
-                        time.sleep(300)  # 5 Minuten warten bei Fehlern
-            
-            logger.info("Auto-Trading gestoppt")
-        
-        self.update_thread = threading.Thread(target=trading_loop, daemon=True)
-        self.update_thread.start()
-        
-        logger.info("Auto-Trading Thread gestartet")
-        return True
-    
-    def get_comprehensive_status(self):
-        """Umfassender Status für Dashboard"""
-        runtime_hours = (datetime.now() - self.start_time).total_seconds() / 3600
-        
-        # Account-Balances
-        main_balance = "N/A"
-        gold_balance = "N/A"
-        
-        try:
-            if self.main_api and self.main_api.is_authenticated():
-                main_info = self.main_api.get_account_info()
-                if main_info and 'accounts' in main_info:
-                    for acc in main_info['accounts']:
-                        if acc.get('accountId') == self.main_api.current_account:
-                            main_balance = f"{acc.get('balance', {}).get('balance', 0):.2f}"
-                            break
-            
-            if self.gold_api and self.gold_api.is_authenticated():
-                gold_info = self.gold_api.get_account_info()
-                if gold_info and 'accounts' in gold_info:
-                    for acc in gold_info['accounts']:
-                        if acc.get('accountId') == self.gold_api.current_account:
-                            gold_balance = f"{acc.get('balance', {}).get('balance', 0):.2f}"
-                            break
-        except Exception as e:
-            logger.error(f"Balance-Abruf Fehler: {e}")
-        
-        # Gold/Silver Preise
-        gold_silver_prices = self.gold_silver_strategy.get_current_prices()
-        
-        return {
-            'running': self.running,
-            'start_time': self.start_time.isoformat(),
-            'runtime_hours': round(runtime_hours, 2),
-            'last_update': datetime.fromtimestamp(self.last_update_time).isoformat() if self.last_update_time else None,
-            'update_interval_minutes': self.update_interval // 60,
-            'analysis_count': self.analysis_count,
-            'trade_count': self.trade_count,
-            'error_count': self.error_count,
-            'success_rate': round((self.analysis_count / max(1, self.analysis_count + self.error_count)) * 100, 1),
-            
-            # Trading Status
-            'trading_hours': self.current_status['trading_hours'],
-            'active_positions': len(self.current_status.get('active_positions', [])),
-            'recent_trades': self.current_status.get('recent_trades', []),
-            
-            # Account Informationen
-            'main_api_connected': self.main_api is not None and self.main_api.is_authenticated(),
-            'gold_api_connected': self.gold_api is not None and self.gold_api.is_authenticated(),
-            'main_account_balance': main_balance,
-            'gold_account_balance': gold_balance,
-            
-            # Market Data
-            'gold_silver_prices': gold_silver_prices,
-            
-            # Strategien
-            'strategies': {
-                'main_strategy_active': self.current_status['trading_hours'].get('main_strategy_trading', False),
-                'gold_silver_active': self.current_status['trading_hours'].get('gold_silver_trading', False)
-            }
-        }
-        
-        logger.info("Trading Bot Controller initialisiert")
-    
-@safe_execute
-def initialize_apis(self):
-    """Capital.com APIs initialisieren"""
-    try:
-        # Haupt-API für Standard Demo Account
-        self.main_api = CapitalComAPI(self.rate_limiter, account_type="main")
-        success_main = self.main_api.authenticate()
-        
-        if success_main:
-            # 2 Sekunden warten für Rate Limit
-            time.sleep(2)
-            
-            # Gold/Silver API für Demo Account 1
-            self.gold_api = CapitalComAPI(self.rate_limiter, account_type="demo1")
-            success_gold = self.gold_api.authenticate()
-            
-            if success_gold:
-                # Auf Demo Account 1 wechseln
-                self.gold_api.switch_account("demo1")
-                logger.info("Beide Capital.com APIs erfolgreich initialisiert")
-                logger.info(f"Main API: {self.main_api.get_current_account_name()}")
-                logger.info(f"Gold API: {self.gold_api.get_current_account_name()}")
-                return True
-            else:
-                logger.error("Gold/Silver API Initialisierung fehlgeschlagen")
-        else:
-            logger.error("Haupt-API Initialisierung fehlgeschlagen")
-            
-    except Exception as e:
-        logger.error(f"API Initialisierung Fehler: {e}")
-    
-    return False
-    
     @safe_execute
     def run_analysis_cycle(self):
         """Kompletter Analyse- und Trading-Zyklus"""
@@ -1929,13 +1401,24 @@ def initialize_apis(self):
             logger.info("Außerhalb der Handelszeiten - Analyse übersprungen")
             return False
         
+        # API Sessions prüfen und bei Bedarf erneuern
+        try:
+            if self.main_api:
+                if not self.main_api.ensure_authenticated():
+                    logger.error("Hauptstrategie API Reconnect fehlgeschlagen")
+            if self.gold_api:
+                if not self.gold_api.ensure_authenticated():
+                    logger.error("Gold/Silver API Reconnect fehlgeschlagen")
+            logger.info("API Sessions geprüft/erneuert")
+        except Exception as e:
+            logger.error(f"API Reconnect Fehler: {e}")
+        
         try:
             analysis_success = False
             
             # Hauptstrategie-Analyse
             if self.current_status['trading_hours'].get('main_strategy_trading', False):
                 logger.info("Führe Hauptstrategie-Analyse durch...")
-                
                 # Daten laden und analysieren
                 if self.main_strategy.fetch_historical_data():
                     if self.main_strategy.calculate_technical_indicators():
@@ -1946,6 +1429,7 @@ def initialize_apis(self):
                         for ticker, stock_data in self.main_strategy.stocks_data.items():
                             technical = stock_data.get("Technical", {})
                             info = stock_data.get("Info", {})
+                            
                             self.database.save_analysis(ticker, {
                                 'price': info.get('CurrentPrice', 0),
                                 'score': 50,  # Placeholder
@@ -1984,17 +1468,23 @@ def initialize_apis(self):
                 self.analysis_count += 1
                 self.last_update_time = time.time()
                 self.current_status['last_analysis'] = datetime.now().isoformat()
-                logger.info(f"Analyse-Zyklus #{self.analysis_count} erfolgreich abgeschlossen")
+                
+                # Erweiterte Logs
+                next_analysis = datetime.now() + timedelta(minutes=self.update_interval//60)
+                logger.info(f"✅ Analyse-Zyklus #{self.analysis_count} abgeschlossen")
+                logger.info(f"📅 Nächste Analyse geplant: {next_analysis.strftime('%H:%M:%S')}")
+                logger.info(f"🔗 API Status - Main: {'OK' if self.main_api and self.main_api.is_authenticated() else 'FAIL'}, Gold: {'OK' if self.gold_api and self.gold_api.is_authenticated() else 'FAIL'}")
+                
                 return True
             else:
                 logger.warning("Keine Analyse durchgeführt (Märkte geschlossen)")
                 return False
-        
+                
         except Exception as e:
             logger.error(f"Analyse-Zyklus Fehler: {e}")
             self.error_count += 1
             return False
-    
+
     @safe_execute
     def execute_main_strategy_trades(self, signals):
         """Hauptstrategie-Trades ausführen"""
@@ -2038,18 +1528,20 @@ def initialize_apis(self):
                     self.database.save_trade(trade_data)
                     executed_trades.append(trade_data)
                     self.trade_count += 1
+                    
                     logger.info(f"Hauptstrategie Trade erfolgreich: {signal['ticker']} {signal['action']}")
                 else:
                     logger.error(f"Hauptstrategie Trade fehlgeschlagen: {signal['ticker']}")
                 
                 # Pause zwischen Trades (Rate Limiting)
                 time.sleep(1)
+                
             except Exception as e:
                 logger.error(f"Hauptstrategie Trade Fehler für {signal['ticker']}: {e}")
         
         logger.info(f"Hauptstrategie: {len(executed_trades)} Trades ausgeführt")
         return executed_trades
-    
+
     @safe_execute
     def execute_gold_silver_trades(self, signals):
         """Gold/Silver-Trades ausführen"""
@@ -2097,16 +1589,18 @@ def initialize_apis(self):
                     self.database.save_trade(trade_data)
                     executed_trades.append(trade_data)
                     self.trade_count += 1
+                    
                     logger.info(f"Gold/Silver Trade erfolgreich: {signal['reason']}")
                     logger.info(f"Confidence: {signal['confidence']:.0f}%")
                 else:
                     logger.error("Gold/Silver Trade fehlgeschlagen")
+                    
             except Exception as e:
                 logger.error(f"Gold/Silver Trade Fehler: {e}")
         
         logger.info(f"Gold/Silver: {len(executed_trades)} Trades ausgeführt")
         return executed_trades
-    
+
     @safe_execute
     def update_positions(self):
         """Aktuelle Positionen von beiden Accounts abrufen"""
@@ -2132,55 +1626,10 @@ def initialize_apis(self):
                 all_positions.extend(gold_positions)
             
             self.current_status['active_positions'] = all_positions
+            
         except Exception as e:
             logger.error(f"Positionen-Update Fehler: {e}")
-    
-    def start_auto_trading(self):
-        """Automatisches Trading starten"""
-        if self.running:
-            logger.warning("Auto-Trading bereits aktiv")
-            return False
-        
-        # APIs initialisieren
-        if not self.initialize_apis():
-            logger.error("API-Initialisierung fehlgeschlagen - Auto-Trading nicht gestartet")
-            return False
-        
-        self.running = True
-        
-        def trading_loop():
-            logger.info(f"Auto-Trading gestartet (Update-Intervall: {self.update_interval//60} Minuten)")
-            
-            # Erste Analyse nach 30 Sekunden
-            time.sleep(30)
-            
-            while self.running:
-                try:
-                    success = self.run_analysis_cycle()
-                    
-                    if success:
-                        logger.info(f"Nächste Analyse in {self.update_interval//60} Minuten")
-                    else:
-                        logger.info(f"Nächste Prüfung in {self.update_interval//60} Minuten")
-                    
-                    # Warten bis zum nächsten Zyklus
-                    sleep_start = time.time()
-                    while self.running and (time.time() - sleep_start) < self.update_interval:
-                        time.sleep(60)  # Jede Minute prüfen
-                
-                except Exception as e:
-                    logger.error(f"Trading-Loop Fehler: {e}")
-                    if self.running:
-                        time.sleep(300)  # 5 Minuten warten bei Fehlern
-            
-            logger.info("Auto-Trading gestoppt")
-        
-        self.update_thread = threading.Thread(target=trading_loop, daemon=True)
-        self.update_thread.start()
-        logger.info("Auto-Trading Thread gestartet")
-        
-        return True
-    
+
     def stop_auto_trading(self):
         """Automatisches Trading stoppen"""
         if self.running:
@@ -2189,73 +1638,111 @@ def initialize_apis(self):
             if self.update_thread and self.update_thread.is_alive():
                 self.update_thread.join(timeout=5)
             logger.info("Auto-Trading gestoppt")
-    
-    def get_comprehensive_status(self):
-        """Umfassender Status für Dashboard"""
-        runtime_hours = (datetime.now() - self.start_time).total_seconds() / 3600
-        
-        # Account-Balances
-        main_balance = "N/A"
-        gold_balance = "N/A"
-        
-        try:
-            if self.main_api and self.main_api.is_authenticated():
-                main_info = self.main_api.get_account_info()
-                if main_info and 'accounts' in main_info:
-                    for acc in main_info['accounts']:
-                        if acc.get('accountId') == self.main_api.current_account:
-                            main_balance = f"{acc.get('balance', {}).get('balance', 0):.2f}"
-                            break
-            
-            if self.gold_api and self.gold_api.is_authenticated():
-                gold_info = self.gold_api.get_account_info()
-                if gold_info and 'accounts' in gold_info:
-                    for acc in gold_info['accounts']:
-                        if acc.get('accountId') == self.gold_api.current_account:
-                            gold_balance = f"{acc.get('balance', {}).get('balance', 0):.2f}"
-                            break
-        except Exception as e:
-            logger.error(f"Balance-Abruf Fehler: {e}")
-        
-        # Gold/Silver Preise
-        gold_silver_prices = self.gold_silver_strategy.get_current_prices()
-        
-        # Recent Trades begrenzen
-        self.current_status['recent_trades'] = self.current_status['recent_trades'][-10:]
-        
-        return {
-            'running': self.running,
-            'start_time': self.start_time.isoformat(),
-            'runtime_hours': round(runtime_hours, 2),
-            'last_update': datetime.fromtimestamp(self.last_update_time).isoformat() if self.last_update_time else None,
-            'update_interval_minutes': self.update_interval // 60,
-            'analysis_count': self.analysis_count,
-            'trade_count': self.trade_count,
-            'error_count': self.error_count,
-            'success_rate': round((self.analysis_count / max(1, self.analysis_count + self.error_count)) * 100, 1),
-            
-            # Trading Status
-            'trading_hours': self.current_status['trading_hours'],
-            'active_positions': len(self.current_status['active_positions']),
-            'recent_trades': self.current_status['recent_trades'],
-            
-            # Account Informationen
-            'main_api_connected': self.main_api is not None and self.main_api.is_authenticated(),
-            'gold_api_connected': self.gold_api is not None and self.gold_api.is_authenticated(),
-            'main_account_balance': main_balance,
-            'gold_account_balance': gold_balance,
-            
-            # Market Data
-            'gold_silver_prices': gold_silver_prices,
-            
-            # Strategien
-            'strategies': {
-                'main_strategy_active': self.current_status['trading_hours'].get('main_strategy_trading', False),
-                'gold_silver_active': self.current_status['trading_hours'].get('gold_silver_trading', False)
-            }
-        }
 
-# FLASK WEB APPLICATION [8]
+    def get_comprehensive_status(self):
+        """Umfassender Status für Dashboard - FEHLENDE METHODE"""
+        try:
+            # APIs Status
+            main_api_status = "Connected" if (self.main_api and self.main_api.is_authenticated()) else "Disconnected"
+            gold_api_status = "Connected" if (self.gold_api and self.gold_api.is_authenticated()) else "Disconnected"
+            
+            # Laufzeit berechnen
+            uptime_seconds = (datetime.now() - self.start_time).total_seconds()
+            uptime_hours = uptime_seconds / 3600
+            
+            # Trading Hours Status
+            trading_status = self.trading_hours.get_trading_status()
+            
+            # Account-Balances
+            main_balance = "N/A"
+            gold_balance = "N/A"
+            
+            try:
+                if self.main_api and self.main_api.is_authenticated():
+                    main_info = self.main_api.get_account_info()
+                    if main_info and 'accounts' in main_info:
+                        for acc in main_info['accounts']:
+                            if acc.get('accountId') == self.main_api.current_account:
+                                main_balance = f"{acc.get('balance', {}).get('balance', 0):.2f}"
+                                break
+                
+                if self.gold_api and self.gold_api.is_authenticated():
+                    gold_info = self.gold_api.get_account_info()
+                    if gold_info and 'accounts' in gold_info:
+                        for acc in gold_info['accounts']:
+                            if acc.get('accountId') == self.gold_api.current_account:
+                                gold_balance = f"{acc.get('balance', {}).get('balance', 0):.2f}"
+                                break
+            except Exception as e:
+                logger.error(f"Balance-Abruf Fehler: {e}")
+            
+            # Gold/Silver Preise (falls verfügbar)
+            try:
+                gold_silver_prices = self.gold_silver_strategy.get_current_prices()
+            except:
+                gold_silver_prices = {}
+            
+            return {
+                "timestamp": datetime.now().isoformat(),
+                "status": "running" if self.running else "stopped",
+                "uptime_hours": round(uptime_hours, 2),
+                "apis": {
+                    "main_api": main_api_status,
+                    "gold_api": gold_api_status
+                },
+                "trading_hours": trading_status,
+                "statistics": {
+                    "analysis_count": self.analysis_count,
+                    "trade_count": self.trade_count,
+                    "error_count": self.error_count,
+                    "last_update": self.current_status.get('last_analysis', 'Never'),
+                    "next_update_in": max(0, self.update_interval - (time.time() - self.last_update_time))
+                },
+                "strategies": {
+                    "main_strategy": {
+                        "name": self.main_strategy.name,
+                        "status": "active" if main_api_status == "Connected" else "inactive"
+                    },
+                    "gold_silver_strategy": {
+                        "name": self.gold_silver_strategy.name,
+                        "status": "active" if gold_api_status == "Connected" else "inactive",
+                        "current_prices": gold_silver_prices
+                    }
+                },
+                "positions": self.current_status.get('active_positions', []),
+                "recent_trades": self.current_status.get('recent_trades', []),
+                # Zusätzliche Status-Daten für Dashboard
+                'running': self.running,
+                'start_time': self.start_time.isoformat(),
+                'runtime_hours': round(uptime_hours, 2),
+                'last_update': datetime.fromtimestamp(self.last_update_time).isoformat() if self.last_update_time else None,
+                'update_interval_minutes': self.update_interval // 60,
+                'analysis_count': self.analysis_count,
+                'trade_count': self.trade_count,
+                'error_count': self.error_count,
+                'success_rate': round((self.analysis_count / max(1, self.analysis_count + self.error_count)) * 100, 1),
+                'active_positions': len(self.current_status['active_positions']),
+                'recent_trades': self.current_status['recent_trades'][-10:],  # Letzte 10
+                'main_api_connected': self.main_api is not None and self.main_api.is_authenticated(),
+                'gold_api_connected': self.gold_api is not None and self.gold_api.is_authenticated(),
+                'main_account_balance': main_balance,
+                'gold_account_balance': gold_balance,
+                'gold_silver_prices': gold_silver_prices,
+                'strategies': {
+                    'main_strategy_active': self.current_status['trading_hours'].get('main_strategy_trading', False),
+                    'gold_silver_active': self.current_status['trading_hours'].get('gold_silver_trading', False)
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Status-Abruf Fehler: {e}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "timestamp": datetime.now().isoformat()
+            }
+
+# FLASK WEB APPLICATION
 app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
 
@@ -2278,7 +1765,7 @@ def initialize_bot():
         logger.error(f"Bot-Initialisierung Fehler: {e}")
         return None
 
-# Dashboard HTML Template (ohne Emojis) [4]
+# Dashboard HTML Template
 DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="de">
@@ -2599,6 +2086,7 @@ def dashboard():
             timestamp=now.strftime("%Y-%m-%d %H:%M:%S"),
             now=now
         )
+        
     except Exception as e:
         logger.error(f"Dashboard Fehler: {e}\n{traceback.format_exc()}")
         return f"""
@@ -2655,6 +2143,7 @@ def force_analysis():
             "message": "Analyse durchgeführt" if success else "Analyse fehlgeschlagen (möglicherweise außerhalb Handelszeiten)",
             "timestamp": datetime.now().isoformat()
         })
+        
     except Exception as e:
         logger.error(f"Manuelle Analyse Fehler: {e}")
         return jsonify({
@@ -2780,6 +2269,7 @@ def view_logs():
         </html>
         """
         return log_html
+        
     except Exception as e:
         return f"<h1>Log-Anzeige Fehler</h1><p>{str(e)}</p>"
 
@@ -2887,7 +2377,6 @@ else:
                 logger.info("Bot erfolgreich für WSGI/Render initialisiert")
         except Exception as e:
             logger.error(f"WSGI Bot-Initialisierung Fehler: {e}")
-        
         logger.info("Flask App bereit für WSGI/Render")
     else:
         logger.error("Startup-Checks für WSGI/Render fehlgeschlagen")
