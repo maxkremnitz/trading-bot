@@ -1253,47 +1253,38 @@ class TradingBotController:
         
         logger.info("Trading Bot Controller initialisiert")
     
-    @safe_execute
-    def initialize_apis(self):
-        """Capital.com APIs initialisieren"""
-        try:
-            # Haupt-API für Standard Demo Account
-            self.main_api = CapitalComAPI(self.rate_limiter, account_type="main")
-            success_main = self.main_api.authenticate()
+@safe_execute
+def initialize_apis(self):
+    """Capital.com APIs initialisieren"""
+    try:
+        # Haupt-API für Standard Demo Account
+        self.main_api = CapitalComAPI(self.rate_limiter, account_type="main")
+        success_main = self.main_api.authenticate()
+        
+        if success_main:
+            # 2 Sekunden warten für Rate Limit
+            time.sleep(2)
             
-            if success_main:
-                # Gold/Silver API für Demo Account 1
-                self.gold_api = CapitalComAPI(self.rate_limiter, account_type="demo1")
-                success_gold = self.gold_api.authenticate()
-                
-                if success_gold:
-                    # Auf Demo Account 1 wechseln
-                    self.gold_api.switch_account("demo1")
-                    logger.info("Beide Capital.com APIs erfolgreich initialisiert")
-                    logger.info(f"Main API: {self.main_api.get_current_account_name()}")
-                    logger.info(f"Gold API: {self.gold_api.get_current_account_name()}")
-                    return True
-                else:
-                    logger.error("Gold/Silver API Initialisierung fehlgeschlagen")
+            # Gold/Silver API für Demo Account 1
+            self.gold_api = CapitalComAPI(self.rate_limiter, account_type="demo1")
+            success_gold = self.gold_api.authenticate()
+            
+            if success_gold:
+                # Auf Demo Account 1 wechseln
+                self.gold_api.switch_account("demo1")
+                logger.info("Beide Capital.com APIs erfolgreich initialisiert")
+                logger.info(f"Main API: {self.main_api.get_current_account_name()}")
+                logger.info(f"Gold API: {self.gold_api.get_current_account_name()}")
+                return True
             else:
-                logger.error("Haupt-API Initialisierung fehlgeschlagen")
-        except Exception as e:
-            logger.error(f"API Initialisierung Fehler: {e}")
-        
-        return False
+                logger.error("Gold/Silver API Initialisierung fehlgeschlagen")
+        else:
+            logger.error("Haupt-API Initialisierung fehlgeschlagen")
+            
+    except Exception as e:
+        logger.error(f"API Initialisierung Fehler: {e}")
     
-    def is_trading_allowed(self):
-        """Prüft ob Trading/Analyse erlaubt ist (Handelszeitenbeschränkung)"""
-        trading_status = self.trading_hours.get_trading_status()
-        self.current_status['trading_hours'] = trading_status
-        
-        if not trading_status['analysis_allowed']:
-            if trading_status.get('next_open_time'):
-                next_open = trading_status['next_open_time']
-                logger.info(f"Märkte geschlossen. Nächste Öffnung: {next_open['market']} in {next_open['hours_until']:.1f}h")
-            return False
-        
-        return True
+    return False
     
     @safe_execute
     def run_analysis_cycle(self):
