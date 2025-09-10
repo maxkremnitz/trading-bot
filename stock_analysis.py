@@ -676,73 +676,84 @@ class CapitalComAPI:
         
         return None
     
- @safe_execute
-def get_account_info(self):
-    """Account-Informationen abrufen"""
-    if not self.is_authenticated():
+    @safe_execute
+    def check_deal_confirmation(self, deal_reference):
+        """Deal Confirmation prüfen"""
+        try:
+            self.rate_limiter.wait_if_needed("general")
+            headers = self._get_auth_headers()
+            response = requests.get(
+                f"{self.base_url}/api/v1/confirms/{deal_reference}",
+                headers=headers,
+                timeout=10
+            )
+            if response.status_code == 200:
+                confirmation = response.json()
+                deal_status = confirmation.get('dealStatus', 'UNKNOWN')
+                deal_id = confirmation.get('dealId')
+                logger.info(f"Deal Confirmation: {deal_status}")
+                if deal_id:
+                    logger.info(f"Deal ID: {deal_id}")
+                return confirmation
+            else:
+                logger.warning(f"Confirmation nicht verfügbar: {response.status_code}")
+        except Exception as e:
+            logger.error(f"Deal Confirmation Fehler: {e}")
         return None
-    try:
-        self.rate_limiter.wait_if_needed("general")
-        headers = self._get_auth_headers()
-        response = requests.get(
-            f"{self.base_url}/api/v1/accounts",
-            headers=headers,
-            timeout=10
-        )
-        if response.status_code == 200:
-            return response.json()
-    except Exception as e:
-        logger.error(f"Account-Info Fehler: {e}")
-    return None
 
-def _get_auth_headers(self):
-    """Auth-Header für API Requests"""
-    if not self.cst_token or not self.security_token:
+    @safe_execute  # ← KORRIGIERT: Richtige Einrückung
+    def get_account_info(self):
+        """Account-Informationen abrufen"""
+        if not self.is_authenticated():
+            return None
+        try:
+            self.rate_limiter.wait_if_needed("general")
+            headers = self._get_auth_headers()
+            response = requests.get(
+                f"{self.base_url}/api/v1/accounts",
+                headers=headers,
+                timeout=10
+            )
+            if response.status_code == 200:
+                return response.json()
+        except Exception as e:
+            logger.error(f"Account-Info Fehler: {e}")
         return None
-    return {
-        'X-CAP-API-KEY': self.api_key,
-        'CST': self.cst_token,
-        'X-SECURITY-TOKEN': self.security_token,
-        'Content-Type': 'application/json'
-    }
 
-def get_current_account_name(self):
-    """Name des aktuellen Accounts"""
-    for acc in self.available_accounts:
-        if acc.get('accountId') == self.current_account:
-            return acc.get('accountName', 'Unknown Account')
-    return 'Unknown Account'
+    def _get_auth_headers(self):
+        """Auth-Header für API Requests"""
+        if not self.cst_token or not self.security_token:
+            return None
+        return {
+            'X-CAP-API-KEY': self.api_key,
+            'CST': self.cst_token,
+            'X-SECURITY-TOKEN': self.security_token,
+            'Content-Type': 'application/json'
+        }
 
-def ensure_authenticated(self):
-    """Stellt sicher, dass Session aktiv ist - Auto-Reconnect"""
-    if not self.is_authenticated():
-        logger.info(f"[API] {self.account_type} Session abgelaufen - neu authentifizieren...")
-        return self.authenticate()
-    return True
+    def get_current_account_name(self):
+        """Name des aktuellen Accounts"""
+        for acc in self.available_accounts:
+            if acc.get('accountId') == self.current_account:
+                return acc.get('accountName', 'Unknown Account')
+        return 'Unknown Account'
+
+    def ensure_authenticated(self):
+        """Stellt sicher, dass Session aktiv ist - Auto-Reconnect"""
+        if not self.is_authenticated():
+            logger.info(f"[API] {self.account_type} Session abgelaufen - neu authentifizieren...")
+            return self.authenticate()
+        return True
 
 # === MAIN TRADING STRATEGY ===
 class MainTradingStrategy:
     """Haupt-Trading-Strategie basierend auf deinem ursprünglichen Code"""
-    def __init__(self):
+    
+    def __init__(self):  # ← KORRIGIERT: __init__ statt **init**
         self.name = "Main Strategy"
         self.stocks_data = {}
         self.data_lock = threading.Lock()
         logger.info(f"{self.name} initialisiert")
-    
-    def get_stock_list(self):
-        """Standard-Aktienliste"""
-        return [
-            {"Name": "Apple Inc.", "Ticker": "AAPL", "Currency": "USD"},
-            {"Name": "Microsoft Corporation", "Ticker": "MSFT", "Currency": "USD"},
-            {"Name": "Amazon.com Inc.", "Ticker": "AMZN", "Currency": "USD"},
-            {"Name": "Tesla Inc.", "Ticker": "TSLA", "Currency": "USD"},
-            {"Name": "NVIDIA Corporation", "Ticker": "NVDA", "Currency": "USD"},
-            {"Name": "Alphabet Inc.", "Ticker": "GOOGL", "Currency": "USD"},
-            {"Name": "Meta Platforms Inc.", "Ticker": "META", "Currency": "USD"},
-            {"Name": "Netflix Inc.", "Ticker": "NFLX", "Currency": "USD"},
-            {"Name": "SAP SE", "Ticker": "SAP.DE", "Currency": "EUR"},
-            {"Name": "Deutsche Telekom AG", "Ticker": "DTE.DE", "Currency": "EUR"}
-        ]
     
     @safe_execute
     def fetch_historical_data(self, period="1y"):
