@@ -2079,8 +2079,8 @@ def api_recent_trades():
             return jsonify({
                 "trades": bot.current_status['recent_trades'][-10:],  # Letzte 10
                 "total_trades": bot.trade_count,
-                "timestamp": datetime.now().isoformat()Request timed out
-                        })
+                "timestamp": datetime.now().isoformat()
+            })
         else:
             return jsonify({"trades": [], "total_trades": 0}), 500
     except Exception as e:
