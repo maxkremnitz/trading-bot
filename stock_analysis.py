@@ -1217,6 +1217,7 @@ class GoldSilverStrategy:
 # MAIN TRADING BOT CONTROLLER
 class TradingBotController:
     """Haupt-Controller für das Dual-Strategy Trading System"""
+    
     def __init__(self):
         self.start_time = datetime.now()
         self.running = False
@@ -1249,6 +1250,118 @@ class TradingBotController:
             'last_analysis': None,
             'active_positions': [],
             'recent_trades': []
+        }
+        
+        logger.info("Trading Bot Controller initialisiert")
+    
+    # === HIER DIE NEUEN METHODEN HINZUFÜGEN ===
+    
+    def start_auto_trading(self):
+        """Automatisches Trading starten"""
+        if self.running:
+            logger.warning("Auto-Trading bereits aktiv")
+            return False
+        
+        # APIs initialisieren
+        if not self.initialize_apis():
+            logger.error("API-Initialisierung fehlgeschlagen - Auto-Trading nicht gestartet")
+            return False
+        
+        self.running = True
+        
+        def trading_loop():
+            logger.info(f"Auto-Trading gestartet (Update-Intervall: {self.update_interval//60} Minuten)")
+            
+            # Erste Analyse nach 30 Sekunden
+            time.sleep(30)
+            
+            while self.running:
+                try:
+                    success = self.run_analysis_cycle()
+                    
+                    if success:
+                        logger.info(f"Nächste Analyse in {self.update_interval//60} Minuten")
+                    else:
+                        logger.info(f"Nächste Prüfung in {self.update_interval//60} Minuten")
+                    
+                    # Warten bis zum nächsten Zyklus
+                    sleep_start = time.time()
+                    while self.running and (time.time() - sleep_start) < self.update_interval:
+                        time.sleep(60)  # Jede Minute prüfen
+                
+                except Exception as e:
+                    logger.error(f"Trading-Loop Fehler: {e}")
+                    if self.running:
+                        time.sleep(300)  # 5 Minuten warten bei Fehlern
+            
+            logger.info("Auto-Trading gestoppt")
+        
+        self.update_thread = threading.Thread(target=trading_loop, daemon=True)
+        self.update_thread.start()
+        
+        logger.info("Auto-Trading Thread gestartet")
+        return True
+    
+    def get_comprehensive_status(self):
+        """Umfassender Status für Dashboard"""
+        runtime_hours = (datetime.now() - self.start_time).total_seconds() / 3600
+        
+        # Account-Balances
+        main_balance = "N/A"
+        gold_balance = "N/A"
+        
+        try:
+            if self.main_api and self.main_api.is_authenticated():
+                main_info = self.main_api.get_account_info()
+                if main_info and 'accounts' in main_info:
+                    for acc in main_info['accounts']:
+                        if acc.get('accountId') == self.main_api.current_account:
+                            main_balance = f"{acc.get('balance', {}).get('balance', 0):.2f}"
+                            break
+            
+            if self.gold_api and self.gold_api.is_authenticated():
+                gold_info = self.gold_api.get_account_info()
+                if gold_info and 'accounts' in gold_info:
+                    for acc in gold_info['accounts']:
+                        if acc.get('accountId') == self.gold_api.current_account:
+                            gold_balance = f"{acc.get('balance', {}).get('balance', 0):.2f}"
+                            break
+        except Exception as e:
+            logger.error(f"Balance-Abruf Fehler: {e}")
+        
+        # Gold/Silver Preise
+        gold_silver_prices = self.gold_silver_strategy.get_current_prices()
+        
+        return {
+            'running': self.running,
+            'start_time': self.start_time.isoformat(),
+            'runtime_hours': round(runtime_hours, 2),
+            'last_update': datetime.fromtimestamp(self.last_update_time).isoformat() if self.last_update_time else None,
+            'update_interval_minutes': self.update_interval // 60,
+            'analysis_count': self.analysis_count,
+            'trade_count': self.trade_count,
+            'error_count': self.error_count,
+            'success_rate': round((self.analysis_count / max(1, self.analysis_count + self.error_count)) * 100, 1),
+            
+            # Trading Status
+            'trading_hours': self.current_status['trading_hours'],
+            'active_positions': len(self.current_status.get('active_positions', [])),
+            'recent_trades': self.current_status.get('recent_trades', []),
+            
+            # Account Informationen
+            'main_api_connected': self.main_api is not None and self.main_api.is_authenticated(),
+            'gold_api_connected': self.gold_api is not None and self.gold_api.is_authenticated(),
+            'main_account_balance': main_balance,
+            'gold_account_balance': gold_balance,
+            
+            # Market Data
+            'gold_silver_prices': gold_silver_prices,
+            
+            # Strategien
+            'strategies': {
+                'main_strategy_active': self.current_status['trading_hours'].get('main_strategy_trading', False),
+                'gold_silver_active': self.current_status['trading_hours'].get('gold_silver_trading', False)
+            }
         }
         
         logger.info("Trading Bot Controller initialisiert")
