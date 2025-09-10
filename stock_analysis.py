@@ -1231,7 +1231,7 @@ class GoldSilverStrategy:
 class TradingBotController:
     """Haupt-Controller für das Dual-Strategy Trading System"""
     
-    def __init__(self):
+    def __init__(self):  # ← ÄNDERUNG 1: __init__ statt **init**
         self.start_time = datetime.now()
         self.running = False
         self.update_thread = None
@@ -1264,9 +1264,8 @@ class TradingBotController:
             'active_positions': [],
             'recent_trades': []
         }
-        
         logger.info("Trading Bot Controller initialisiert")
-    
+
     @safe_execute
     def initialize_apis(self):
         """Capital.com APIs initialisieren"""
@@ -1294,12 +1293,10 @@ class TradingBotController:
                     logger.error("Gold/Silver API Initialisierung fehlgeschlagen")
             else:
                 logger.error("Haupt-API Initialisierung fehlgeschlagen")
-                
         except Exception as e:
             logger.error(f"API Initialisierung Fehler: {e}")
-        
         return False
-    
+
     def is_trading_allowed(self):
         """Prüft ob Trading/Analyse erlaubt ist (Handelszeitenbeschränkung)"""
         trading_status = self.trading_hours.get_trading_status()
@@ -1310,7 +1307,6 @@ class TradingBotController:
                 next_open = trading_status['next_open_time']
                 logger.info(f"Märkte geschlossen. Nächste Öffnung: {next_open['market']} in {next_open['hours_until']:.1f}h")
             return False
-        
         return True
     
 @safe_execute
