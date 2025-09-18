@@ -1653,8 +1653,7 @@ class TradingBotController:
             # Update-Thread starten
             if self.update_thread is None or not self.update_thread.is_alive():
                 self.update_thread = threading.Thread(target=self._auto_trading_loop, daemon=True)
-                self.Request timed out
-                                self.update_thread.start()
+                self.update_thread.start()
                 logger.info("Auto-Trading Thread gestartet")
             
             return True
