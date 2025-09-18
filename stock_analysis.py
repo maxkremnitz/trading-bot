@@ -22,7 +22,6 @@ import sqlite3
 from contextlib import contextmanager
 import warnings
 warnings.filterwarnings('ignore')
-
 load_dotenv()
 
 # Logging Setup
@@ -39,14 +38,13 @@ logger = logging.getLogger(__name__)
 # RATE LIMITER
 class RateLimiter:
     """Capital.com API Rate Limiter - 10 req/sec, 1 req/0.1sec für Trading"""
-    
     def __init__(self):
         self.general_requests = []
         self.trading_requests = []
         self.session_requests = []
         self.lock = threading.Lock()
         logger.info("Rate Limiter initialisiert")
-
+    
     def can_make_request(self, request_type="general"):
         """Prüft ob Request gemacht werden darf"""
         with self.lock:
@@ -70,7 +68,7 @@ class RateLimiter:
                     return False, 1.0 - (now - self.general_requests[0])
                 self.general_requests.append(now)
             return True, 0
-
+    
     def wait_if_needed(self, request_type="general"):
         """Wartet falls Rate Limit erreicht"""
         can_proceed, wait_time = self.can_make_request(request_type)
@@ -81,7 +79,6 @@ class RateLimiter:
 # TRADING HOURS MANAGER
 class TradingHoursManager:
     """Handelszeitenbeschränkungen - KOMPLETT STOPP außerhalb Handelszeiten"""
-    
     def __init__(self):
         self.market_hours = {
             'NYSE': {
@@ -104,7 +101,7 @@ class TradingHoursManager:
             }
         }
         logger.info("Trading Hours Manager initialisiert")
-
+    
     def is_market_open(self, market='NYSE'):
         """Prüft ob Markt geöffnet ist"""
         try:
@@ -138,7 +135,7 @@ class TradingHoursManager:
         except Exception as e:
             logger.error(f"Marktzeit-Prüfung Fehler: {e}")
             return False, "Zeitprüfung fehlgeschlagen"
-
+    
     def get_trading_status(self):
         """Umfassender Trading-Status für beide Strategien"""
         nyse_open, nyse_status = self.is_market_open('NYSE')
@@ -161,7 +158,7 @@ class TradingHoursManager:
             'forex_status': forex_status,
             'next_open_time': self.get_next_market_open() if not any_market_open else None
         }
-
+    
     def get_next_market_open(self):
         """Berechnet nächste Marktöffnung"""
         try:
@@ -183,7 +180,7 @@ class TradingHoursManager:
         except Exception as e:
             logger.error(f"Nächste Marktöffnung Fehler: {e}")
             return None
-
+    
     def _get_next_open_time(self, market):
         """Berechnet nächste Öffnungszeit für spezifischen Markt"""
         try:
@@ -215,7 +212,6 @@ class TradingHoursManager:
                     )
                     return next_open.astimezone(pytz.UTC)
                 days_ahead += 1
-            
             return None
         except Exception as e:
             logger.error(f"Nächste Öffnungszeit für {market}: {e}")
@@ -255,12 +251,11 @@ def safe_round(value, decimals=2):
 # DATABASE MANAGER
 class DatabaseManager:
     """SQLite Datenbank für Trade-History und Persistierung"""
-    
     def __init__(self, db_path="trading_bot.db"):
         self.db_path = db_path
         self.init_database()
         logger.info("Database Manager initialisiert")
-
+    
     def init_database(self):
         """Datenbank und Tabellen erstellen"""
         try:
@@ -322,7 +317,7 @@ class DatabaseManager:
                 logger.info("Datenbank-Tabellen erstellt/geprüft")
         except Exception as e:
             logger.error(f"Datenbank-Initialisierung Fehler: {e}")
-
+    
     @contextmanager
     def get_connection(self):
         """Sichere Datenbankverbindung"""
@@ -338,7 +333,7 @@ class DatabaseManager:
         finally:
             if conn:
                 conn.close()
-
+    
     @safe_execute
     def save_analysis(self, ticker, data, strategy="main", account_type="demo"):
         """Analyse-Daten speichern"""
@@ -364,7 +359,7 @@ class DatabaseManager:
                     conn.commit()
         except Exception as e:
             logger.error(f"Analyse-Speicherung Fehler: {e}")
-
+    
     @safe_execute
     def save_trade(self, trade_data):
         """Trade-Daten speichern"""
@@ -394,7 +389,7 @@ class DatabaseManager:
                     conn.commit()
         except Exception as e:
             logger.error(f"Trade-Speicherung Fehler: {e}")
-
+    
     @safe_execute
     def get_recent_trades(self, limit=10):
         """Letzte Trades abrufen"""
@@ -411,10 +406,9 @@ class DatabaseManager:
             logger.error(f"Trade-Abruf Fehler: {e}")
         return []
 
-# CAPITAL.COM API CLIENT
+# CAPITAL.COM API CLIENT MIT ERROR RECOVERY
 class CapitalComAPI:
-    """Capital.com API Client mit Dual-Account Support"""
-    
+    """Capital.com API Client mit Dual-Account Support und Error Recovery"""
     def __init__(self, rate_limiter, account_type="main"):
         self.api_key = os.getenv('CAPITAL_API_KEY')
         self.password = os.getenv('CAPITAL_PASSWORD')
@@ -436,6 +430,10 @@ class CapitalComAPI:
         self.available_accounts = []
         self.current_account = None
         
+        # Position Tracking für Error Recovery
+        self.tracked_positions = {}
+        self.last_position_sync = 0
+        
         # Epic Mapping
         self.epic_mapping = {
             'AAPL': 'AAPL', 'MSFT': 'MSFT', 'AMZN': 'AMZN', 'TSLA': 'TSLA',
@@ -443,15 +441,14 @@ class CapitalComAPI:
             'SAP.DE': 'SAP', 'DTE.DE': 'DTE',
             'GOLD': 'GOLD', 'SILVER': 'SILVER', 'GLD': 'GOLD', 'SLV': 'SILVER'
         }
-        
         logger.info(f"Capital.com API initialisiert (Account: {account_type})")
-
+    
     def is_authenticated(self):
         """Prüft Session-Status"""
         if not self.cst_token or not self.security_token:
             return False
         return (time.time() - self.last_auth_time) < self.auth_timeout
-
+    
     @safe_execute
     def authenticate(self):
         """Session erstellen mit Rate Limiting"""
@@ -526,7 +523,7 @@ class CapitalComAPI:
             logger.error(f"Authentifizierung Fehler: {e}")
         
         return False
-
+    
     @safe_execute
     def switch_account(self, target_account_type="demo1"):
         """Account wechseln (Demo Account 1 vs Standard Demo)"""
@@ -571,6 +568,9 @@ class CapitalComAPI:
                 self.account_id = target_id
                 acc_name = target_account.get('accountName', 'Unknown')
                 logger.info(f"Account gewechselt zu: {acc_name}")
+                
+                # Position-Tracking nach Account-Wechsel zurücksetzen
+                self.sync_positions_after_manual_changes()
                 return True
             else:
                 logger.error(f"Account-Wechsel fehlgeschlagen: {response.status_code}")
@@ -578,10 +578,41 @@ class CapitalComAPI:
             logger.error(f"Account-Wechsel Fehler: {e}")
         
         return False
-
+    
+    @safe_execute
+    def sync_positions_after_manual_changes(self):
+        """Synchronisiert Position-Tracking nach manuellen Änderungen"""
+        try:
+            logger.info("Synchronisiere Positionen nach möglichen manuellen Änderungen...")
+            current_positions = self.get_positions()
+            
+            # Tracking-Daten zurücksetzen
+            old_count = len(self.tracked_positions)
+            self.tracked_positions.clear()
+            
+            # Neue Positionen tracken
+            for pos in current_positions:
+                position_id = pos.get('dealId', pos.get('positionId', ''))
+                if position_id:
+                    self.tracked_positions[position_id] = {
+                        'ticker': pos.get('epic', ''),
+                        'direction': pos.get('direction', ''),
+                        'size': pos.get('size', 0),
+                        'created_time': time.time()
+                    }
+            
+            new_count = len(self.tracked_positions)
+            logger.info(f"Position-Sync: {old_count} -> {new_count} Positionen")
+            self.last_position_sync = time.time()
+            
+            return True
+        except Exception as e:
+            logger.error(f"Position-Sync Fehler: {e}")
+            return False
+    
     @safe_execute
     def get_positions(self):
-        """Aktuelle Positionen abrufen"""
+        """Aktuelle Positionen abrufen mit Error Recovery"""
         if not self.is_authenticated():
             return []
         
@@ -597,17 +628,64 @@ class CapitalComAPI:
             
             if response.status_code == 200:
                 data = response.json()
-                return data.get('positions', [])
+                positions = data.get('positions', [])
+                
+                # Regelmäßige Position-Sync (alle 5 Minuten)
+                if time.time() - self.last_position_sync > 300:
+                    self.sync_positions_after_manual_changes()
+                
+                return positions
             else:
                 logger.warning(f"Positionen-Abruf Status: {response.status_code}")
+                # Bei Fehlern Position-Sync versuchen
+                if response.status_code in [400, 401]:
+                    logger.info("Mögliche Position-Diskrepanz - synchronisiere...")
+                    self.sync_positions_after_manual_changes()
         except Exception as e:
             logger.error(f"Positionen-Abruf Fehler: {e}")
         
         return []
-
+    
     @safe_execute
-    def place_order(self, ticker, direction, size=0.1, stop_distance=None, profit_distance=None):
-        """Order platzieren mit Deal Confirmation"""
+    def get_available_balance(self):
+        """Verfügbares Kapital für Position Sizing abrufen"""
+        try:
+            account_info = self.get_account_info()
+            if account_info and 'accounts' in account_info:
+                for acc in account_info['accounts']:
+                    if acc.get('accountId') == self.current_account:
+                        balance_info = acc.get('balance', {})
+                        available = balance_info.get('available', 0)
+                        total_balance = balance_info.get('balance', 0)
+                        logger.info(f"Account Balance - Total: {total_balance}, Available: {available}")
+                        return float(available) if available else float(total_balance)
+            
+            logger.warning("Konnte Balance nicht ermitteln - nutze Fallback")
+            return 10000.0  # Fallback für Demo-Account
+        except Exception as e:
+            logger.error(f"Balance-Abruf Fehler: {e}")
+            return 10000.0  # Fallback
+    
+    @safe_execute
+    def calculate_position_size_percentage(self, target_percentage=7.5):
+        """Berechnet Position Size basierend auf verfügbarem Kapital"""
+        try:
+            available_balance = self.get_available_balance()
+            target_amount = available_balance * (target_percentage / 100)
+            
+            # Capital.com Position Size Anpassung
+            # Für Demo-Accounts ist oft 0.1 minimum, für größere Beträge entsprechend skalieren
+            position_size = max(0.1, target_amount / 2000.0)  # Anpassung basierend auf Asset-Wert
+            
+            logger.info(f"Position Size Berechnung: {target_percentage}% von {available_balance} = Size {position_size}")
+            return round(position_size, 2)
+        except Exception as e:
+            logger.error(f"Position Size Berechnung Fehler: {e}")
+            return 0.1  # Minimum Fallback
+    
+    @safe_execute
+    def place_order(self, ticker, direction, size=None, stop_distance=None, profit_distance=None, use_percentage_size=False, percentage=7.5):
+        """Order platzieren mit Deal Confirmation und dynamischer Position Size"""
         if not self.is_authenticated():
             logger.error("Nicht authentifiziert für Trading")
             return None
@@ -615,6 +693,10 @@ class CapitalComAPI:
         epic = self.epic_mapping.get(ticker, ticker)
         
         try:
+            # Position Size berechnen falls gewünscht
+            if use_percentage_size or size is None:
+                size = self.calculate_position_size_percentage(percentage)
+            
             # Trading Rate Limit (max 1/0.1s)
             self.rate_limiter.wait_if_needed("trading")
             headers = self._get_auth_headers()
@@ -655,15 +737,29 @@ class CapitalComAPI:
                     time.sleep(1)  # Kurz warten für Verarbeitung
                     confirmation = self.check_deal_confirmation(deal_reference)
                     result['confirmation'] = confirmation
+                    
+                    # Position zu Tracking hinzufügen
+                    if confirmation and confirmation.get('dealStatus') == 'ACCEPTED':
+                        deal_id = confirmation.get('dealId')
+                        if deal_id:
+                            self.tracked_positions[deal_id] = {
+                                'ticker': ticker,
+                                'direction': direction,
+                                'size': size,
+                                'created_time': time.time()
+                            }
                 
                 return result
             else:
                 logger.error(f"Order fehlgeschlagen ({response.status_code}): {response.text}")
+                # Bei 400-Fehlern könnte eine Position-Diskrepanz vorliegen
+                if response.status_code == 400:
+                    self.sync_positions_after_manual_changes()
         except Exception as e:
             logger.error(f"Order-Fehler für {epic}: {e}")
         
         return None
-
+    
     @safe_execute
     def check_deal_confirmation(self, deal_reference):
         """Deal Confirmation prüfen"""
@@ -681,11 +777,9 @@ class CapitalComAPI:
                 confirmation = response.json()
                 deal_status = confirmation.get('dealStatus', 'UNKNOWN')
                 deal_id = confirmation.get('dealId')
-                
                 logger.info(f"Deal Confirmation: {deal_status}")
                 if deal_id:
                     logger.info(f"Deal ID: {deal_id}")
-                
                 return confirmation
             else:
                 logger.warning(f"Confirmation nicht verfügbar: {response.status_code}")
@@ -693,7 +787,7 @@ class CapitalComAPI:
             logger.error(f"Deal Confirmation Fehler: {e}")
         
         return None
-
+    
     @safe_execute
     def get_account_info(self):
         """Account-Informationen abrufen"""
@@ -716,25 +810,26 @@ class CapitalComAPI:
             logger.error(f"Account-Info Fehler: {e}")
         
         return None
-
+    
     def _get_auth_headers(self):
         """Auth-Header für API Requests"""
         if not self.cst_token or not self.security_token:
             return None
+        
         return {
             'X-CAP-API-KEY': self.api_key,
             'CST': self.cst_token,
             'X-SECURITY-TOKEN': self.security_token,
             'Content-Type': 'application/json'
         }
-
+    
     def get_current_account_name(self):
         """Name des aktuellen Accounts"""
         for acc in self.available_accounts:
             if acc.get('accountId') == self.current_account:
                 return acc.get('accountName', 'Unknown Account')
         return 'Unknown Account'
-
+    
     def ensure_authenticated(self):
         """Stellt sicher, dass Session aktiv ist - Auto-Reconnect"""
         if not self.is_authenticated():
@@ -742,16 +837,18 @@ class CapitalComAPI:
             return self.authenticate()
         return True
 
-# === MAIN TRADING STRATEGY ===
+# === MAIN TRADING STRATEGY (ÜBERARBEITET FÜR MEHR TRADES) ===
 class MainTradingStrategy:
-    """Haupt-Trading-Strategie basierend auf deinem ursprünglichen Code"""
-    
+    """Haupt-Trading-Strategie mit aggressiveren Parametern für mehr Trades"""
     def __init__(self):
         self.name = "Main Strategy"
         self.stocks_data = {}
         self.data_lock = threading.Lock()
+        self.daily_trade_count = 0
+        self.last_trade_date = None
+        self.hours_since_market_open = 0
         logger.info(f"{self.name} initialisiert")
-
+    
     def get_stock_list(self):
         """Standard-Aktienliste"""
         return [
@@ -766,14 +863,29 @@ class MainTradingStrategy:
             {"Name": "SAP SE", "Ticker": "SAP.DE", "Currency": "EUR"},
             {"Name": "Deutsche Telekom AG", "Ticker": "DTE.DE", "Currency": "EUR"}
         ]
-
+    
+    def update_daily_trade_tracking(self):
+        """Aktualisiert tägliche Trade-Statistiken"""
+        today = datetime.now().date()
+        if self.last_trade_date != today:
+            self.daily_trade_count = 0
+            self.last_trade_date = today
+            logger.info(f"Neuer Handelstag: {today}")
+        
+        # Geschätzte Stunden seit Marktöffnung (vereinfacht)
+        current_hour = datetime.now().hour
+        if 15 <= current_hour <= 23:  # NYSE/XETRA etwa geöffnet
+            self.hours_since_market_open = current_hour - 15
+        else:
+            self.hours_since_market_open = 0
+    
     @safe_execute
     def fetch_historical_data(self, period="1y"):
         """Historische Daten laden"""
         stocks_list = self.get_stock_list()
         logger.info(f"Lade Daten für {len(stocks_list)} Aktien...")
-        
         success_count = 0
+        
         for stock in stocks_list:
             ticker = stock["Ticker"]
             try:
@@ -807,12 +919,13 @@ class MainTradingStrategy:
                     logger.info(f"{ticker}: {len(data)} Datenpunkte, Preis: ${current_price:.2f}")
                 else:
                     logger.warning(f"Ungenügend Daten für {ticker}")
+            
             except Exception as e:
                 logger.error(f"Daten-Fehler für {ticker}: {e}")
         
         logger.info(f"Daten geladen: {success_count}/{len(stocks_list)} erfolgreich")
         return success_count > 0
-
+    
     @safe_execute
     def calculate_technical_indicators(self):
         """Technische Indikatoren berechnen"""
@@ -925,105 +1038,111 @@ class MainTradingStrategy:
                         technical["Volatility_Rating"] = "Medium"
                     
                     self.stocks_data[ticker]["Technical"] = technical
-                    
+                
                 except Exception as e:
                     logger.error(f"Technische Analyse Fehler für {ticker}: {e}")
         
         logger.info("Technische Indikatoren berechnet")
         return True
-
+    
     @safe_execute
     def generate_trade_signals(self):
-        """Trade-Signale generieren basierend auf deinem Scoring-System"""
-        signals = []
+        """Trade-Signale mit aggressiveren Parametern für mehr Trades"""
+        # Daily Trade Tracking aktualisieren
+        self.update_daily_trade_tracking()
         
+        signals = []
         with self.data_lock:
             for ticker, stock_data in self.stocks_data.items():
                 try:
                     technical = stock_data.get("Technical", {})
                     stock_info = stock_data.get("Info", {})
                     
-                    # Scoring-System von deinem ursprünglichen Code
+                    # Aggressiveres Scoring-System
                     score = 50.0  # Neutral starting score
                     
-                    # RSI Factor
+                    # RSI Factor (weniger restriktiv)
                     rsi = technical.get("RSI", 50.0)
-                    if rsi < 30:
+                    if rsi < 35:  # Erweitert von 30
                         score += 15  # Oversold, positive for buying
-                    elif rsi > 70:
+                    elif rsi > 65:  # Erweitert von 70
                         score -= 15  # Overbought, negative for buying
-                    elif 45 <= rsi <= 55:
-                        score += 5   # Neutral RSI is slightly positive
+                    elif 40 <= rsi <= 60:  # Erweitert von 45-55
+                        score += 8   # Neutral RSI ist mehr positiv
                     
-                    # Trend Factor
+                    # Trend Factor (mehr Gewichtung)
                     trend_slope = technical.get("Trend_Slope", 0.0)
                     trend_strength = technical.get("Trend_Strength", 0.0)
                     
-                    if trend_strength > 0.8:
+                    if trend_strength > 0.7:  # Gesenkt von 0.8
                         if trend_slope > 0:
-                            score += 20  # Strong uptrend
+                            score += 25  # Erhöht von 20
                         else:
-                            score -= 20  # Strong downtrend
-                    elif trend_strength > 0.6:
+                            score -= 25  # Erhöht von 20
+                    elif trend_strength > 0.5:  # Gesenkt von 0.6
                         if trend_slope > 0:
-                            score += 15
+                            score += 18  # Erhöht von 15
                         else:
-                            score -= 15
-                    elif trend_strength > 0.4:
+                            score -= 18
+                    elif trend_strength > 0.3:  # Gesenkt von 0.4
                         if trend_slope > 0:
-                            score += 10
+                            score += 12  # Erhöht von 10
                         else:
-                            score -= 10
+                            score -= 12
                     
-                    # MACD Factor
+                    # MACD Factor (liberaler)
                     macd_hist = technical.get("MACD_Histogram", 0.0)
-                    if macd_hist > 1.0:
-                        score += 10
-                    elif macd_hist > 0.3:
-                        score += 5
+                    if macd_hist > 0.5:  # Gesenkt von 1.0
+                        score += 12  # Erhöht von 10
+                    elif macd_hist > 0.1:  # Gesenkt von 0.3
+                        score += 8   # Erhöht von 5
                     elif macd_hist > 0:
-                        score += 2
-                    elif macd_hist < -1.0:
-                        score -= 10
-                    elif macd_hist < -0.3:
-                        score -= 5
+                        score += 4   # Erhöht von 2
+                    elif macd_hist < -0.5:  # Angepasst
+                        score -= 12
+                    elif macd_hist < -0.1:
+                        score -= 8
                     elif macd_hist < 0:
-                        score -= 2
+                        score -= 4
                     
-                    # Moving Average Factor
+                    # Moving Average Factor (weniger strikt)
                     price_vs_ma20 = technical.get("Price_vs_MA20", 0.0)
                     price_vs_ma50 = technical.get("Price_vs_MA50", 0.0)
                     
-                    if price_vs_ma20 > 3 and price_vs_ma50 > 2:
-                        score += 10  # Above moving averages
-                    elif price_vs_ma20 < -3 and price_vs_ma50 < -2:
-                        score -= 10  # Below moving averages
+                    if price_vs_ma20 > 1.5 and price_vs_ma50 > 1:  # Gesenkt von 3 und 2
+                        score += 12  # Erhöht von 10
+                    elif price_vs_ma20 < -1.5 and price_vs_ma50 < -1:
+                        score -= 12
+                    elif price_vs_ma20 > 0.5:  # Neue Regel für kleinere Bewegungen
+                        score += 6
+                    elif price_vs_ma20 < -0.5:
+                        score -= 6
                     
-                    # Volatility Factor
+                    # Volatility Factor (mehr Belohnung)
                     volatility = technical.get("Volatility", 2.0)
                     vol_rating = technical.get("Volatility_Rating", "Medium")
                     
                     if vol_rating in ["High", "Very High"]:
-                        score += 5  # High volatility can be profitable
+                        score += 8  # Erhöht von 5
                     elif vol_rating == "Medium":
-                        score += 3
+                        score += 5  # Erhöht von 3
                     elif vol_rating == "Low":
-                        score += 1
+                        score += 3  # Erhöht von 1
                     
                     # Score begrenzen
                     score = max(0, min(100, score))
                     
-                    # Rating und Action bestimmen
-                    if score >= 75:
+                    # Liberalere Rating und Action Schwellen
+                    if score >= 68:    # Gesenkt von 75
                         rating = "Strong Long"
                         action = "BUY"
-                    elif score >= 65:
+                    elif score >= 58:  # Gesenkt von 65
                         rating = "Long"
                         action = "BUY"
-                    elif score >= 35:
+                    elif score >= 42:  # Verengt von 35-65 auf 42-58
                         rating = "Hold"
                         action = "HOLD"
-                    elif score >= 25:
+                    elif score >= 32:  # Gesenkt von 25
                         rating = "Short"
                         action = "SELL"
                     else:
@@ -1035,9 +1154,9 @@ class MainTradingStrategy:
                         current_price = stock_info.get("CurrentPrice", 0)
                         confidence = min(100, abs(score - 50) * 2)
                         
-                        # Trading-Parameter berechnen
-                        sl_percent = 2.0 if confidence < 60 else 1.5
-                        tp_percent = 3.0 if confidence < 60 else 4.0
+                        # Aggressivere Trading-Parameter (kleinere TP für mehr Trades)
+                        sl_percent = 1.5 if confidence < 60 else 1.2  # Gesenkt von 2.0/1.5
+                        tp_percent = 2.0 if confidence < 60 else 2.5  # Gesenkt von 3.0/4.0
                         
                         if action == 'BUY':
                             stop_loss = current_price * (1 - sl_percent/100)
@@ -1061,7 +1180,7 @@ class MainTradingStrategy:
                             'take_profit': take_profit,
                             'stop_distance': stop_distance,
                             'profit_distance': profit_distance,
-                            'position_size': min(0.1, confidence / 1000),
+                            'position_size': min(0.15, confidence / 800),  # Erhöht von 0.1 und 1000
                             'strategy': self.name,
                             'reason': f"Score: {score:.1f}, RSI: {rsi:.1f}, Trend: {trend_slope:.4f}"
                         }
@@ -1072,36 +1191,111 @@ class MainTradingStrategy:
                 except Exception as e:
                     logger.error(f"Signal-Generierung Fehler für {ticker}: {e}")
         
-        logger.info(f"{self.name}: {len(signals)} Trade-Signale generiert")
+        # Mindestens ein Trade pro Tag forcieren falls nötig
+        if len(signals) == 0 and self.daily_trade_count == 0 and self.hours_since_market_open >= 4:
+            logger.info("Keine Signale gefunden - versuche Mindest-Trade zu forcieren...")
+            signals = self._force_minimum_daily_trade()
+        
+        logger.info(f"{self.name}: {len(signals)} Trade-Signale generiert (Heute: {self.daily_trade_count} Trades)")
         return signals
-
-# GOLD/SILVER STRATEGY
-class GoldSilverStrategy:
-    """Gold/Silver Test-Strategie für Demo Account 1"""
     
+    def _force_minimum_daily_trade(self):
+        """Forciert mindestens einen Trade wenn zu wenig Aktivität"""
+        try:
+            potential_signals = []
+            
+            with self.data_lock:
+                for ticker, stock_data in self.stocks_data.items():
+                    technical = stock_data.get("Technical", {})
+                    stock_info = stock_data.get("Info", {})
+                    
+                    # Vereinfachtes Scoring für Notfall-Trade
+                    rsi = technical.get("RSI", 50.0)
+                    trend_slope = technical.get("Trend_Slope", 0.0)
+                    
+                    score_deviation = abs(rsi - 50) + abs(trend_slope * 1000)  # Einfache Abweichung
+                    
+                    if score_deviation > 5:  # Mindest-Abweichung für Trade
+                        action = "BUY" if (rsi < 50 and trend_slope >= 0) or (rsi <= 40) else "SELL"
+                        
+                        potential_signals.append({
+                            'ticker': ticker,
+                            'action': action,
+                            'rating': 'Forced Minimum',
+                            'score': 60 if action == "BUY" else 40,
+                            'confidence': min(60, score_deviation * 3),
+                            'current_price': stock_info.get("CurrentPrice", 0),
+                            'position_size': 0.1,  # Konservativ für Notfall-Trade
+                            'strategy': f"{self.name} (Forced)",
+                            'reason': f"Minimum Daily Trade - RSI: {rsi:.1f}, Trend: {trend_slope:.4f}",
+                            'deviation_score': score_deviation
+                        })
+            
+            if potential_signals:
+                # Bestes Signal auswählen (höchste Abweichung)
+                best_signal = max(potential_signals, key=lambda x: x['deviation_score'])
+                
+                # Trading-Parameter hinzufügen
+                current_price = best_signal['current_price']
+                sl_percent = 1.0  # Konservativ
+                tp_percent = 1.5  # Konservativ
+                
+                if best_signal['action'] == 'BUY':
+                    stop_loss = current_price * (1 - sl_percent/100)
+                    take_profit = current_price * (1 + tp_percent/100)
+                else:
+                    stop_loss = current_price * (1 + sl_percent/100)
+                    take_profit = current_price * (1 - tp_percent/100)
+                
+                best_signal.update({
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'stop_distance': max(10, int(abs(current_price - stop_loss) * 100)),
+                    'profit_distance': max(10, int(abs(take_profit - current_price) * 100))
+                })
+                
+                logger.info(f"Forciere Minimum-Trade: {best_signal['ticker']} {best_signal['action']} (Abweichung: {best_signal['deviation_score']:.1f})")
+                return [best_signal]
+        
+        except Exception as e:
+            logger.error(f"Minimum Trade Force Fehler: {e}")
+        
+        return []
+
+# GOLD/SILVER STRATEGY (ÜBERARBEITET FÜR 7.5% POSITION SIZE UND HÄUFIGERE TRADES)
+class GoldSilverStrategy:
+    """Gold/Silver Strategie mit 7.5% Position Size und häufigeren kleinen Trades"""
     def __init__(self):
         self.name = "Gold/Silver Test Strategy"
         self.cache = {}
-        self.cache_timeout = 300  # 5 Minuten Cache
+        self.cache_timeout = 180  # 3 Minuten Cache (häufigere Updates)
+        self.trade_count_today = 0
+        self.last_trade_time = 0
+        self.min_trade_interval = 1800  # 30 Minuten zwischen Trades
         logger.info(f"{self.name} initialisiert")
-
+    
     @safe_execute
     def get_simulated_prices(self):
-        """Simulierte Gold/Silber Preise (ohne externe API-Calls)"""
+        """Simulierte Gold/Silber Preise mit mehr Variationen"""
         now = time.time()
         if 'prices' in self.cache and (now - self.cache.get('timestamp', 0)) < self.cache_timeout:
             return self.cache['prices']
         
-        # Basis-Preise mit kleinen Variationen
+        # Basis-Preise mit mehr Variationen für häufigere Signale
         base_gold = 2000.0
         base_silver = 25.0
         
-        # Zufällige Schwankungen simulieren
-        gold_variation = (np.random.random() - 0.5) * 40  # ±20
-        silver_variation = (np.random.random() - 0.5) * 4  # ±2
+        # Größere Schwankungen für mehr Trade-Opportunities
+        gold_variation = (np.random.random() - 0.5) * 60  # ±30 (erhöht von ±20)
+        silver_variation = (np.random.random() - 0.5) * 6   # ±3 (erhöht von ±2)
         
-        gold_change = (np.random.random() - 0.5) * 4  # ±2%
-        silver_change = (np.random.random() - 0.5) * 6  # ±3%
+        gold_change = (np.random.random() - 0.5) * 6    # ±3% (erhöht von ±2%)
+        silver_change = (np.random.random() - 0.5) * 8  # ±4% (erhöht von ±3%)
+        
+        # Gelegentlich stärkere Bewegungen (öfter als vorher)
+        if np.random.random() < 0.4:  # 40% statt 20%
+            gold_change *= 1.5
+            silver_change *= 1.3
         
         prices = {
             'gold': {
@@ -1123,19 +1317,22 @@ class GoldSilverStrategy:
         self.cache['timestamp'] = now
         
         return prices
-
+    
     @safe_execute
     def analyze_silver_trend(self):
-        """Vereinfachte Silber-Trend-Analyse für Gold-Signale"""
+        """Erweiterte Silber-Trend-Analyse für häufigere Signale"""
         try:
-            # Simulierte Trend-Daten
-            trend_change = (np.random.random() - 0.5) * 4  # -2% bis +2%
-            change_24h = (np.random.random() - 0.5) * 2    # -1% bis +1%
+            # Mehr variierende Trend-Daten
+            trend_change = (np.random.random() - 0.5) * 6  # ±3% (erhöht von ±2%)
+            change_24h = (np.random.random() - 0.5) * 3    # ±1.5% (erhöht von ±1%)
             
-            # Manchmal stärkere Bewegungen für Testing
-            if np.random.random() < 0.2:  # 20% Chance
-                trend_change *= 2
-                change_24h *= 1.5
+            # Häufiger stärkere Bewegungen
+            if np.random.random() < 0.3:  # 30% statt 20%
+                trend_change *= 1.5
+                change_24h *= 1.2
+            
+            # Zusätzlicher intraday momentum indicator
+            intraday_momentum = (np.random.random() - 0.5) * 4  # ±2%
             
             trend_direction = "up" if trend_change > 0 else "down"
             
@@ -1143,19 +1340,28 @@ class GoldSilverStrategy:
                 'trend_direction': trend_direction,
                 'total_change_pct': trend_change,
                 'change_24h_pct': change_24h,
-                'is_significant': abs(trend_change) > 1.0,
-                'is_strong_trend': abs(trend_change) > 2.0
+                'intraday_momentum': intraday_momentum,
+                'is_significant': abs(trend_change) > 0.8,  # Gesenkt von 1.0
+                'is_strong_trend': abs(trend_change) > 1.8,  # Gesenkt von 2.0
+                'has_momentum': abs(intraday_momentum) > 1.0
             }
             
             return analysis
         except Exception as e:
             logger.error(f"Silber-Trend Analyse Fehler: {e}")
             return None
-
+    
     @safe_execute
     def generate_gold_trade_signal(self):
-        """Gold Trade-Signal basierend auf Silber-Korrelation"""
+        """Gold Trade-Signal mit liberaleren Parametern und 7.5% Position Size"""
         try:
+            # Rate Limiting prüfen
+            current_time = time.time()
+            if current_time - self.last_trade_time < self.min_trade_interval:
+                remaining_time = self.min_trade_interval - (current_time - self.last_trade_time)
+                logger.info(f"Gold/Silver: Trade-Interval aktiv, noch {remaining_time/60:.1f} Minuten")
+                return None
+            
             # Aktuelle Preise abrufen
             prices = self.get_simulated_prices()
             if not prices:
@@ -1168,29 +1374,50 @@ class GoldSilverStrategy:
             
             signal = None
             
-            # SELL GOLD Signal: Silber stark gestiegen (inverse Korrelation)
-            if (silver_analysis['trend_direction'] == 'up' and
-                silver_analysis['total_change_pct'] > 1.0):
-                confidence = min(100, abs(silver_analysis['total_change_pct']) * 25)
+            # SELL GOLD Signal: Erweiterte Bedingungen
+            if ((silver_analysis['trend_direction'] == 'up' and silver_analysis['total_change_pct'] > 0.8) or  # Gesenkt von 1.0
+                (silver_analysis['change_24h_pct'] > 1.0) or  # Neue Bedingung
+                (silver_analysis['has_momentum'] and silver_analysis['intraday_momentum'] > 1.2)):  # Neue Bedingung
+                
+                confidence = min(100, (abs(silver_analysis['total_change_pct']) + abs(silver_analysis['change_24h_pct'])) * 20)
+                
                 signal = {
                     'action': 'SELL',
                     'ticker': 'GOLD',
                     'instrument': 'GOLD',
-                    'reason': f"Silber stieg {silver_analysis['total_change_pct']:.1f}% (inverse Korrelation)",
+                    'reason': f"Silber Signale: 3T: {silver_analysis['total_change_pct']:.1f}%, 24h: {silver_analysis['change_24h_pct']:.1f}%, Mom: {silver_analysis['intraday_momentum']:.1f}%",
                     'confidence': confidence,
                     'strategy': self.name
                 }
             
-            # BUY GOLD Signal: Silber gefallen in 24h
-            elif silver_analysis['change_24h_pct'] < -0.5:
-                confidence = min(100, abs(silver_analysis['change_24h_pct']) * 30)
+            # BUY GOLD Signal: Erweiterte Bedingungen
+            elif ((silver_analysis['change_24h_pct'] < -0.6) or  # Gesenkt von -0.5
+                  (silver_analysis['trend_direction'] == 'down' and silver_analysis['total_change_pct'] < -0.8) or  # Neue Bedingung
+                  (silver_analysis['has_momentum'] and silver_analysis['intraday_momentum'] < -1.0)):  # Neue Bedingung
+                
+                confidence = min(100, (abs(silver_analysis['total_change_pct']) + abs(silver_analysis['change_24h_pct'])) * 25)
+                
                 signal = {
                     'action': 'BUY',
                     'ticker': 'GOLD',
                     'instrument': 'GOLD',
-                    'reason': f"Silber fiel {abs(silver_analysis['change_24h_pct']):.1f}% in 24h",
+                    'reason': f"Silber Schwäche: 3T: {silver_analysis['total_change_pct']:.1f}%, 24h: {silver_analysis['change_24h_pct']:.1f}%, Mom: {silver_analysis['intraday_momentum']:.1f}%",
                     'confidence': confidence,
                     'strategy': self.name
+                }
+            
+            # Gelegentlicher zufälliger Trade wenn lange nichts (für Testing)
+            elif (self.trade_count_today == 0 and 
+                  np.random.random() < 0.15):  # 15% Chance für Random Trade
+                
+                random_action = 'BUY' if np.random.random() > 0.5 else 'SELL'
+                signal = {
+                    'action': random_action,
+                    'ticker': 'GOLD',
+                    'instrument': 'GOLD',
+                    'reason': f"Random Test Trade - Silber neutral (3T: {silver_analysis['total_change_pct']:.1f}%, 24h: {silver_analysis['change_24h_pct']:.1f}%)",
+                    'confidence': 35,
+                    'strategy': f"{self.name} (Random)"
                 }
             
             # HOLD: Keine signifikanten Bewegungen
@@ -1199,18 +1426,23 @@ class GoldSilverStrategy:
                     'action': 'HOLD',
                     'ticker': 'GOLD',
                     'instrument': 'GOLD',
-                    'reason': f"Silber neutral (3T: {silver_analysis['total_change_pct']:.1f}%, 24h: {silver_analysis['change_24h_pct']:.1f}%)",
+                    'reason': f"Silber neutral (3T: {silver_analysis['total_change_pct']:.1f}%, 24h: {silver_analysis['change_24h_pct']:.1f}%, Mom: {silver_analysis['intraday_momentum']:.1f}%)",
                     'confidence': 0,
                     'strategy': self.name
                 }
             
-            # Trading-Parameter hinzufügen für BUY/SELL
+            # Trading-Parameter für BUY/SELL hinzufügen
             if signal and signal['action'] in ['BUY', 'SELL']:
                 gold_price = prices['gold']['current']
                 
-                # Konservative Parameter für Test-Trades
-                sl_percent = 1.0  # 1% Stop Loss
-                tp_percent = 2.0  # 2% Take Profit
+                # Kleinere TP/SL für häufigere Trades (wie gewünscht)
+                sl_percent = 0.8   # Gesenkt von 1.0% 
+                tp_percent = 1.2   # Gesenkt von 2.0%
+                
+                # Manchmal noch kleinere Targets für sehr häufige Trades
+                if signal['confidence'] < 50:
+                    sl_percent = 0.6
+                    tp_percent = 0.9
                 
                 if signal['action'] == 'BUY':
                     stop_loss = gold_price * (1 - sl_percent/100)
@@ -1229,16 +1461,27 @@ class GoldSilverStrategy:
                     'take_profit': take_profit,
                     'stop_distance': stop_distance,
                     'profit_distance': profit_distance,
-                    'position_size': 0.05,  # Kleine Test-Position
-                    'silver_analysis': silver_analysis
+                    'use_percentage_size': True,  # 7.5% Position Size verwenden
+                    'percentage': 7.5,  # 7.5% vom verfügbaren Kapital
+                    'position_size': 0.1,  # Fallback falls Percentage-Berechnung fehlschlägt
+                    'silver_analysis': silver_analysis,
+                    'sl_percent': sl_percent,
+                    'tp_percent': tp_percent
                 })
+                
+                # Trade-Zeit aktualisieren
+                self.last_trade_time = current_time
+                self.trade_count_today += 1
+                
+                logger.info(f"Gold Signal generiert: {signal['action']} (7.5% Position Size)")
+                logger.info(f"  TP: {tp_percent}%, SL: {sl_percent}%, Confidence: {signal['confidence']}%")
             
             return signal
-            
+        
         except Exception as e:
             logger.error(f"Gold Signal Generierung Fehler: {e}")
             return None
-
+    
     def get_current_prices(self):
         """Aktuelle Gold/Silber Preise für Dashboard"""
         try:
@@ -1253,15 +1496,19 @@ class GoldSilverStrategy:
             logger.error(f"Preis-Abruf Fehler: {e}")
             return {}
 
-# === MAIN TRADING BOT CONTROLLER ===
+# === MAIN TRADING BOT CONTROLLER (RENDER STABILITY IMPROVEMENTS) ===
 class TradingBotController:
-    """Haupt-Controller für das Dual-Strategy Trading System"""
-    
+    """Haupt-Controller mit Render Platform Stability Verbesserungen"""
     def __init__(self):
         self.start_time = datetime.now()
         self.running = False
         self.update_thread = None
         self.data_lock = threading.Lock()
+        
+        # Render-spezifische Stabilität
+        self.health_check_count = 0
+        self.last_health_check = time.time()
+        self.restart_count = 0
         
         # Komponenten initialisieren
         self.rate_limiter = RateLimiter()
@@ -1292,10 +1539,57 @@ class TradingBotController:
         }
         
         logger.info("Trading Bot Controller initialisiert")
-
+    
+    def perform_health_check(self):
+        """Regelmäßiger Health Check für Render Stability"""
+        try:
+            self.health_check_count += 1
+            current_time = time.time()
+            
+            # Memory Management für Render
+            if os.getenv('RENDER'):
+                import gc
+                gc.collect()
+            
+            # API Status prüfen
+            main_api_ok = self.main_api is not None and self.main_api.is_authenticated()
+            gold_api_ok = self.gold_api is not None and self.gold_api.is_authenticated()
+            
+            # Restart falls nötig
+            if self.running and not main_api_ok and not gold_api_ok:
+                logger.warning("Beide APIs disconnected - versuche Restart...")
+                self.restart_apis()
+            
+            self.last_health_check = current_time
+            
+            if self.health_check_count % 10 == 0:  # Alle 10 Health Checks loggen
+                logger.info(f"Health Check #{self.health_check_count}: Main API: {'OK' if main_api_ok else 'FAIL'}, Gold API: {'OK' if gold_api_ok else 'FAIL'}")
+        
+        except Exception as e:
+            logger.error(f"Health Check Fehler: {e}")
+    
+    def restart_apis(self):
+        """API Restart nach Verbindungsproblemen"""
+        try:
+            self.restart_count += 1
+            logger.info(f"API Restart #{self.restart_count}")
+            
+            # Kurze Pause
+            time.sleep(5)
+            
+            # APIs neu initialisieren
+            success = self.initialize_apis()
+            if success:
+                logger.info("API Restart erfolgreich")
+            else:
+                logger.error("API Restart fehlgeschlagen")
+        
+        except Exception as e:
+            logger.error(f"API Restart Fehler: {e}")
+    
     @safe_execute
     def initialize_apis(self):
-        """Capital.com APIs initialisieren"""
+        """Capital.com APIs initialisieren mit Error Recovery"""
         try:
             # Haupt-API für Standard Demo Account
             self.main_api = CapitalComAPI(self.rate_limiter, account_type="main")
@@ -1312,6 +1606,7 @@ class TradingBotController:
                 if success_gold:
                     # Auf Demo Account 1 wechseln
                     self.gold_api.switch_account("demo1")
+                    
                     logger.info("Beide Capital.com APIs erfolgreich initialisiert")
                     logger.info(f"Main API: {self.main_api.get_current_account_name()}")
                     logger.info(f"Gold API: {self.gold_api.get_current_account_name()}")
@@ -1320,11 +1615,12 @@ class TradingBotController:
                     logger.error("Gold/Silver API Initialisierung fehlgeschlagen")
             else:
                 logger.error("Haupt-API Initialisierung fehlgeschlagen")
+        
         except Exception as e:
             logger.error(f"API Initialisierung Fehler: {e}")
         
         return False
-
+    
     def is_trading_allowed(self):
         """Prüft ob Trading/Analyse erlaubt ist (Handelszeitenbeschränkung)"""
         trading_status = self.trading_hours.get_trading_status()
@@ -1335,15 +1631,16 @@ class TradingBotController:
                 next_open = trading_status['next_open_time']
                 logger.info(f"Märkte geschlossen. Nächste Öffnung: {next_open['market']} in {next_open['hours_until']:.1f}h")
             return False
+        
         return True
-
+    
     def start_auto_trading(self):
-        """Auto-Trading starten - FEHLENDE METHODE"""
+        """Auto-Trading starten mit Render Stability"""
         try:
             if self.running:
                 logger.info("Auto-Trading läuft bereits")
                 return True
-                
+            
             logger.info("Auto-Trading wird gestartet...")
             
             # APIs initialisieren
@@ -1356,23 +1653,28 @@ class TradingBotController:
             # Update-Thread starten
             if self.update_thread is None or not self.update_thread.is_alive():
                 self.update_thread = threading.Thread(target=self._auto_trading_loop, daemon=True)
-                self.update_thread.start()
+                self.Request timed out
+                                self.update_thread.start()
                 logger.info("Auto-Trading Thread gestartet")
             
             return True
-            
+        
         except Exception as e:
             logger.error(f"Auto-Trading Start Fehler: {e}")
             self.running = False
             return False
-
+    
     def _auto_trading_loop(self):
-        """Haupt-Trading-Loop (läuft in separatem Thread)"""
+        """Haupt-Trading-Loop mit Health Checks"""
         logger.info("Auto-Trading Loop gestartet")
         
         while self.running:
             try:
                 current_time = time.time()
+                
+                # Regelmäßiger Health Check (alle 60 Sekunden)
+                if current_time - self.last_health_check > 60:
+                    self.perform_health_check()
                 
                 # Prüfen ob Update fällig ist
                 if current_time - self.last_update_time >= self.update_interval:
@@ -1385,15 +1687,15 @@ class TradingBotController:
                 
                 # 30 Sekunden warten vor nächster Prüfung
                 time.sleep(30)
-                
+            
             except Exception as e:
                 logger.error(f"Auto-Trading Loop Fehler: {e}")
                 self.error_count += 1
                 time.sleep(60)  # Bei Fehler länger warten
-
+    
     @safe_execute
     def run_analysis_cycle(self):
-        """Kompletter Analyse- und Trading-Zyklus"""
+        """Kompletter Analyse- und Trading-Zyklus mit Error Recovery"""
         logger.info("Starte Analyse-Zyklus...")
         
         # Handelszeitenbeschränkung prüfen
@@ -1406,9 +1708,11 @@ class TradingBotController:
             if self.main_api:
                 if not self.main_api.ensure_authenticated():
                     logger.error("Hauptstrategie API Reconnect fehlgeschlagen")
+            
             if self.gold_api:
                 if not self.gold_api.ensure_authenticated():
                     logger.error("Gold/Silver API Reconnect fehlgeschlagen")
+            
             logger.info("API Sessions geprüft/erneuert")
         except Exception as e:
             logger.error(f"API Reconnect Fehler: {e}")
@@ -1419,6 +1723,7 @@ class TradingBotController:
             # Hauptstrategie-Analyse
             if self.current_status['trading_hours'].get('main_strategy_trading', False):
                 logger.info("Führe Hauptstrategie-Analyse durch...")
+                
                 # Daten laden und analysieren
                 if self.main_strategy.fetch_historical_data():
                     if self.main_strategy.calculate_technical_indicators():
@@ -1430,9 +1735,16 @@ class TradingBotController:
                             technical = stock_data.get("Technical", {})
                             info = stock_data.get("Info", {})
                             
+                            # Score aus vorhandenem Signal extrahieren oder Fallback
+                            signal_score = 50
+                            for signal in main_signals:
+                                if signal['ticker'] == ticker:
+                                    signal_score = signal['score']
+                                    break
+                            
                             self.database.save_analysis(ticker, {
                                 'price': info.get('CurrentPrice', 0),
-                                'score': 50,  # Placeholder
+                                'score': signal_score,
                                 'rating': 'Analyzed',
                                 'rsi': technical.get('RSI', 0),
                                 'macd': technical.get('MACD_Histogram', 0),
@@ -1479,12 +1791,12 @@ class TradingBotController:
             else:
                 logger.warning("Keine Analyse durchgeführt (Märkte geschlossen)")
                 return False
-                
+        
         except Exception as e:
             logger.error(f"Analyse-Zyklus Fehler: {e}")
             self.error_count += 1
             return False
-
+    
     @safe_execute
     def execute_main_strategy_trades(self, signals):
         """Hauptstrategie-Trades ausführen"""
@@ -1497,7 +1809,8 @@ class TradingBotController:
         # Auf Standard Demo Account sicherstellen
         self.main_api.switch_account("main")
         
-        for signal in signals[:3]:  # Max 3 Trades pro Zyklus
+        # Mehr Trades pro Zyklus erlauben (war 3, jetzt 5)
+        for signal in signals[:5]:
             try:
                 logger.info(f"Ausführung Hauptstrategie: {signal['ticker']} {signal['action']}")
                 
@@ -1529,22 +1842,25 @@ class TradingBotController:
                     executed_trades.append(trade_data)
                     self.trade_count += 1
                     
+                    # Daily trade count für Hauptstrategie aktualisieren
+                    self.main_strategy.daily_trade_count += 1
+                    
                     logger.info(f"Hauptstrategie Trade erfolgreich: {signal['ticker']} {signal['action']}")
                 else:
                     logger.error(f"Hauptstrategie Trade fehlgeschlagen: {signal['ticker']}")
                 
                 # Pause zwischen Trades (Rate Limiting)
                 time.sleep(1)
-                
+            
             except Exception as e:
                 logger.error(f"Hauptstrategie Trade Fehler für {signal['ticker']}: {e}")
         
         logger.info(f"Hauptstrategie: {len(executed_trades)} Trades ausgeführt")
         return executed_trades
-
+    
     @safe_execute
     def execute_gold_silver_trades(self, signals):
-        """Gold/Silver-Trades ausführen"""
+        """Gold/Silver-Trades mit 7.5% Position Size ausführen"""
         executed_trades = []
         
         if not self.gold_api or not self.gold_api.is_authenticated():
@@ -1560,22 +1876,33 @@ class TradingBotController:
                     logger.info(f"Gold/Silver HOLD: {signal['reason']}")
                     continue
                 
-                logger.info(f"Ausführung Gold/Silver: {signal['ticker']} {signal['action']}")
+                logger.info(f"Ausführung Gold/Silver: {signal['ticker']} {signal['action']} (7.5% Position Size)")
+                logger.info(f"  TP: {signal.get('tp_percent', 1.2)}%, SL: {signal.get('sl_percent', 0.8)}%")
                 
+                # 7.5% Position Size verwenden
                 result = self.gold_api.place_order(
                     ticker=signal['ticker'],
                     direction=signal['action'],
-                    size=signal['position_size'],
+                    size=None,  # Wird durch percentage berechnet
                     stop_distance=signal['stop_distance'],
-                    profit_distance=signal['profit_distance']
+                    profit_distance=signal['profit_distance'],
+                    use_percentage_size=signal.get('use_percentage_size', True),
+                    percentage=signal.get('percentage', 7.5)
                 )
                 
                 if result:
+                    # Tatsächliche Position Size aus Result extrahieren
+                    actual_size = signal.get('position_size', 0.1)
+                    if 'confirmation' in result and result['confirmation']:
+                        confirmation = result['confirmation']
+                        if 'size' in confirmation:
+                            actual_size = confirmation['size']
+                    
                     trade_data = {
                         'ticker': signal['ticker'],
                         'action': signal['action'],
                         'score': signal['confidence'],
-                        'position_size': signal['position_size'],
+                        'position_size': actual_size,
                         'stop_loss': signal['stop_loss'],
                         'take_profit': signal['take_profit'],
                         'status': 'executed',
@@ -1591,16 +1918,17 @@ class TradingBotController:
                     self.trade_count += 1
                     
                     logger.info(f"Gold/Silver Trade erfolgreich: {signal['reason']}")
+                    logger.info(f"Position Size: {actual_size} (7.5% vom Kapital)")
                     logger.info(f"Confidence: {signal['confidence']:.0f}%")
                 else:
                     logger.error("Gold/Silver Trade fehlgeschlagen")
-                    
+            
             except Exception as e:
                 logger.error(f"Gold/Silver Trade Fehler: {e}")
         
         logger.info(f"Gold/Silver: {len(executed_trades)} Trades ausgeführt")
         return executed_trades
-
+    
     @safe_execute
     def update_positions(self):
         """Aktuelle Positionen von beiden Accounts abrufen"""
@@ -1626,10 +1954,10 @@ class TradingBotController:
                 all_positions.extend(gold_positions)
             
             self.current_status['active_positions'] = all_positions
-            
+        
         except Exception as e:
             logger.error(f"Positionen-Update Fehler: {e}")
-
+    
     def stop_auto_trading(self):
         """Automatisches Trading stoppen"""
         if self.running:
@@ -1638,9 +1966,9 @@ class TradingBotController:
             if self.update_thread and self.update_thread.is_alive():
                 self.update_thread.join(timeout=5)
             logger.info("Auto-Trading gestoppt")
-
+    
     def get_comprehensive_status(self):
-        """Umfassender Status für Dashboard - FEHLENDE METHODE"""
+        """Umfassender Status für Dashboard"""
         try:
             # APIs Status
             main_api_status = "Connected" if (self.main_api and self.main_api.is_authenticated()) else "Disconnected"
@@ -1673,14 +2001,19 @@ class TradingBotController:
                             if acc.get('accountId') == self.gold_api.current_account:
                                 gold_balance = f"{acc.get('balance', {}).get('balance', 0):.2f}"
                                 break
+            
             except Exception as e:
                 logger.error(f"Balance-Abruf Fehler: {e}")
             
-            # Gold/Silver Preise (falls verfügbar)
+            # Gold/Silver Preise
             try:
                 gold_silver_prices = self.gold_silver_strategy.get_current_prices()
             except:
                 gold_silver_prices = {}
+            
+            # Nächste Update-Zeit
+            next_update_seconds = max(0, self.update_interval - (time.time() - self.last_update_time))
+            next_update_minutes = next_update_seconds / 60
             
             return {
                 "timestamp": datetime.now().isoformat(),
@@ -1695,23 +2028,29 @@ class TradingBotController:
                     "analysis_count": self.analysis_count,
                     "trade_count": self.trade_count,
                     "error_count": self.error_count,
+                    "restart_count": self.restart_count,
+                    "health_checks": self.health_check_count,
                     "last_update": self.current_status.get('last_analysis', 'Never'),
-                    "next_update_in": max(0, self.update_interval - (time.time() - self.last_update_time))
+                    "next_update_in_minutes": round(next_update_minutes, 1)
                 },
                 "strategies": {
                     "main_strategy": {
                         "name": self.main_strategy.name,
-                        "status": "active" if main_api_status == "Connected" else "inactive"
+                        "status": "active" if main_api_status == "Connected" else "inactive",
+                        "daily_trades": self.main_strategy.daily_trade_count,
+                        "hours_since_open": self.main_strategy.hours_since_market_open
                     },
                     "gold_silver_strategy": {
                         "name": self.gold_silver_strategy.name,
                         "status": "active" if gold_api_status == "Connected" else "inactive",
-                        "current_prices": gold_silver_prices
+                        "current_prices": gold_silver_prices,
+                        "daily_trades": self.gold_silver_strategy.trade_count_today,
+                        "last_trade_minutes_ago": (time.time() - self.gold_silver_strategy.last_trade_time) / 60 if self.gold_silver_strategy.last_trade_time > 0 else 999
                     }
                 },
                 "positions": self.current_status.get('active_positions', []),
                 "recent_trades": self.current_status.get('recent_trades', []),
-                # Zusätzliche Status-Daten für Dashboard
+                # Dashboard-spezifische Daten
                 'running': self.running,
                 'start_time': self.start_time.isoformat(),
                 'runtime_hours': round(uptime_hours, 2),
@@ -1733,7 +2072,7 @@ class TradingBotController:
                     'gold_silver_active': self.current_status['trading_hours'].get('gold_silver_trading', False)
                 }
             }
-            
+        
         except Exception as e:
             logger.error(f"Status-Abruf Fehler: {e}")
             return {
@@ -1742,7 +2081,7 @@ class TradingBotController:
                 "timestamp": datetime.now().isoformat()
             }
 
-# FLASK WEB APPLICATION
+# FLASK WEB APPLICATION MIT RENDER IMPROVEMENTS
 app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
 
@@ -1750,29 +2089,45 @@ app.config['JSON_SORT_KEYS'] = False
 trading_bot = None
 
 def initialize_bot():
-    """Trading Bot initialisieren"""
+    """Trading Bot initialisieren mit Render Stability"""
     global trading_bot
     try:
         if trading_bot is None:
             trading_bot = TradingBotController()
+            
             # Auto-Trading starten falls aktiviert
             if os.getenv('TRADING_ENABLED', 'true').lower() == 'true':
                 trading_bot.start_auto_trading()
             else:
                 logger.info("Trading deaktiviert (TRADING_ENABLED=false)")
+        
         return trading_bot
+    
     except Exception as e:
         logger.error(f"Bot-Initialisierung Fehler: {e}")
         return None
 
-# Dashboard HTML Template
+# Render Health Check vor jedem Request
+@app.before_request
+def ensure_bot_health():
+    """Stellt sicher dass Bot läuft (Render Stability)"""
+    global trading_bot
+    if os.getenv('RENDER'):
+        try:
+            if not trading_bot or not trading_bot.running:
+                logger.info("Bot Health Check: Reinitializing...")
+                trading_bot = initialize_bot()
+        except Exception as e:
+            logger.error(f"Bot Health Check Fehler: {e}")
+
+# Dashboard HTML Template (ERWEITERT)
 DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="de">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dual-Strategy Trading Bot</title>
+    <title>Dual-Strategy Trading Bot v2.0</title>
     <meta http-equiv="refresh" content="60">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1782,7 +2137,7 @@ DASHBOARD_HTML = """
             min-height: 100vh;
             color: #333;
         }
-        .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
+        .container { max-width: 1800px; margin: 0 auto; padding: 20px; }
         .header {
             background: rgba(255,255,255,0.95);
             padding: 25px;
@@ -1792,8 +2147,17 @@ DASHBOARD_HTML = """
             box-shadow: 0 8px 32px rgba(0,0,0,0.1);
             backdrop-filter: blur(10px);
         }
-        .header h1 { font-size: 2.2em; margin-bottom: 8px; color: #2c3e50; }
+        .header h1 { font-size: 2.4em; margin-bottom: 8px; color: #2c3e50; }
         .header p { color: #7f8c8d; font-size: 1em; }
+        .version-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+            color: white;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            margin-left: 10px;
+        }
         .trading-hours {
             background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
             padding: 20px;
@@ -1804,7 +2168,7 @@ DASHBOARD_HTML = """
         }
         .status-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 20px;
             margin-bottom: 25px;
         }
@@ -1831,7 +2195,7 @@ DASHBOARD_HTML = """
         }
         .accounts-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
             gap: 20px;
             margin-top: 15px;
         }
@@ -1840,6 +2204,19 @@ DASHBOARD_HTML = """
             padding: 20px;
             border-radius: 12px;
             border-left: 5px solid #2196f3;
+        }
+        .strategy-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .stat-item {
+            background: rgba(255,255,255,0.8);
+            padding: 8px 12px;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 0.9em;
         }
         .trades-section {
             background: rgba(255,255,255,0.95);
@@ -1880,41 +2257,55 @@ DASHBOARD_HTML = """
         .footer { text-align: center; margin-top: 30px; color: rgba(255,255,255,0.8); }
         .timestamp { color: #95a5a6; font-size: 0.85em; }
         .small-text { font-size: 0.9em; color: #666; }
+        .health-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .health-green { background-color: #27ae60; }
+        .health-red { background-color: #e74c3c; }
+        .health-orange { background-color: #f39c12; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>Dual-Strategy Trading Bot</h1>
-            <p>Hauptstrategie (Demo Account) + Gold/Silver Test (Demo Account 1)</p>
-            <p class="timestamp">{{ timestamp }} | Update alle {{ status.update_interval_minutes }} Minuten</p>
+            <h1>Dual-Strategy Trading Bot<span class="version-badge">v2.0 - Enhanced</span></h1>
+            <p>Hauptstrategie (Demo Account) + Gold/Silver 7.5% Strategy (Demo Account 1)</p>
+            <p class="timestamp">{{ timestamp }} | Update alle {{ status.update_interval_minutes }} Minuten | Nächste in {{ "%.1f"|format(status.statistics.next_update_in_minutes) }}min</p>
         </div>
         
         <!-- Trading Hours Status -->
         <div class="trading-hours">
-            <h2>Handelszeiten-Status</h2>
+            <h2>🕐 Handelszeiten-Status</h2>
             <div class="price-grid">
                 <div class="price-card">
                     <h4>NYSE</h4>
                     <div class="{{ 'status-online' if 'OFFEN' in status.trading_hours.nyse_status else 'status-offline' }}">
+                        <span class="health-indicator {{ 'health-green' if 'OFFEN' in status.trading_hours.nyse_status else 'health-red' }}"></span>
                         {{ status.trading_hours.nyse_status }}
                     </div>
                 </div>
                 <div class="price-card">
                     <h4>XETRA</h4>
                     <div class="{{ 'status-online' if 'OFFEN' in status.trading_hours.xetra_status else 'status-offline' }}">
+                        <span class="health-indicator {{ 'health-green' if 'OFFEN' in status.trading_hours.xetra_status else 'health-red' }}"></span>
                         {{ status.trading_hours.xetra_status }}
                     </div>
                 </div>
                 <div class="price-card">
                     <h4>FOREX</h4>
                     <div class="{{ 'status-online' if 'OFFEN' in status.trading_hours.forex_status else 'status-offline' }}">
+                        <span class="health-indicator {{ 'health-green' if 'OFFEN' in status.trading_hours.forex_status else 'health-red' }}"></span>
                         {{ status.trading_hours.forex_status }}
                     </div>
                 </div>
                 <div class="price-card">
-                    <h4>Analyse Status</h4>
+                    <h4>Bot Status</h4>
                     <div class="{{ 'status-online' if status.trading_hours.analysis_allowed else 'status-offline' }}">
+                        <span class="health-indicator {{ 'health-green' if status.trading_hours.analysis_allowed else 'health-red' }}"></span>
                         {{ 'AKTIV' if status.trading_hours.analysis_allowed else 'GESTOPPT' }}
                     </div>
                 </div>
@@ -1924,7 +2315,7 @@ DASHBOARD_HTML = """
         <!-- Gold/Silver Prices -->
         {% if status.gold_silver_prices %}
         <div class="gold-silver-panel">
-            <h2>Gold & Silver Live Preise (Simuliert)</h2>
+            <h2>💰 Gold & Silver Live Preise (7.5% Position Size Strategy)</h2>
             <div class="price-grid">
                 <div class="price-card">
                     <h3>Gold</h3>
@@ -1940,6 +2331,13 @@ DASHBOARD_HTML = """
                         {{ "%.2f"|format(status.gold_silver_prices.silver_change) }}% (24h)
                     </small>
                 </div>
+                {% if status.strategies.gold_silver_strategy %}
+                <div class="price-card">
+                    <h3>Heute Trades</h3>
+                    <div class="value">{{ status.strategies.gold_silver_strategy.daily_trades }}</div>
+                    <small>Letzter vor {{ "%.0f"|format(status.strategies.gold_silver_strategy.last_trade_minutes_ago) }}min</small>
+                </div>
+                {% endif %}
             </div>
         </div>
         {% endif %}
@@ -1947,37 +2345,38 @@ DASHBOARD_HTML = """
         <!-- System Status -->
         <div class="status-grid">
             <div class="card">
-                <h3>Bot Status</h3>
+                <h3>🤖 Bot Status</h3>
                 <p class="value {{ 'status-online' if status.running else 'status-offline' }}">
                     {{ 'RUNNING' if status.running else 'STOPPED' }}
                 </p>
-                <small>Laufzeit: {{ "%.1f"|format(status.runtime_hours) }}h</small>
+                <small>Laufzeit: {{ "%.1f"|format(status.runtime_hours) }}h | Restarts: {{ status.statistics.restart_count }}</small>
             </div>
             <div class="card">
-                <h3>Analysen</h3>
+                <h3>📊 Analysen</h3>
                 <p class="value">{{ status.analysis_count }}</p>
-                <small>Erfolgsrate: {{ status.success_rate }}%</small>
+                <small>Erfolgsrate: {{ status.success_rate }}% | Health Checks: {{ status.statistics.health_checks }}</small>
             </div>
             <div class="card">
-                <h3>Aktive Positionen</h3>
+                <h3>📈 Aktive Positionen</h3>
                 <p class="value">{{ status.active_positions }}</p>
                 <small>Über beide Accounts</small>
             </div>
             <div class="card">
-                <h3>Total Trades</h3>
+                <h3>🎯 Total Trades</h3>
                 <p class="value">{{ status.trade_count }}</p>
-                <small>Main + Gold/Silver</small>
+                <small>Main + Gold/Silver | Fehler: {{ status.error_count }}</small>
             </div>
         </div>
         
         <!-- Account Information -->
         <div class="accounts-section">
-            <h2>Account Status</h2>
+            <h2>💳 Account Status</h2>
             <div class="accounts-grid">
                 <div class="account-card">
-                    <h3>Main Strategy Account</h3>
+                    <h3>📈 Main Strategy Account</h3>
                     <p><strong>Status:</strong>
                         <span class="{{ 'status-online' if status.main_api_connected else 'status-offline' }}">
+                            <span class="health-indicator {{ 'health-green' if status.main_api_connected else 'health-red' }}"></span>
                             {{ 'CONNECTED' if status.main_api_connected else 'DISCONNECTED' }}
                         </span>
                     </p>
@@ -1987,12 +2386,26 @@ DASHBOARD_HTML = """
                             {{ 'ACTIVE' if status.strategies.main_strategy_active else 'INACTIVE' }}
                         </span>
                     </p>
-                    <p class="small-text">Standard Demo Account</p>
+                    {% if status.strategies.main_strategy %}
+                    <div class="strategy-stats">
+                        <div class="stat-item">
+                            <strong>{{ status.strategies.main_strategy.daily_trades }}</strong><br>
+                            <small>Heute Trades</small>
+                        </div>
+                        <div class="stat-item">
+                            <strong>{{ status.strategies.main_strategy.hours_since_open }}h</strong><br>
+                            <small>Seit Öffnung</small>
+                        </div>
+                    </div>
+                    {% endif %}
+                    <p class="small-text">Standard Demo Account | Aggressivere Parameter</p>
                 </div>
+                
                 <div class="account-card">
-                    <h3>Gold/Silver Test Account</h3>
+                    <h3>🥇 Gold/Silver Test Account</h3>
                     <p><strong>Status:</strong>
                         <span class="{{ 'status-online' if status.gold_api_connected else 'status-offline' }}">
+                            <span class="health-indicator {{ 'health-green' if status.gold_api_connected else 'health-red' }}"></span>
                             {{ 'CONNECTED' if status.gold_api_connected else 'DISCONNECTED' }}
                         </span>
                     </p>
@@ -2002,16 +2415,32 @@ DASHBOARD_HTML = """
                             {{ 'ACTIVE' if status.strategies.gold_silver_active else 'INACTIVE' }}
                         </span>
                     </p>
-                    <p class="small-text">Demo - Account 1</p>
+                    {% if status.strategies.gold_silver_strategy %}
+                    <div class="strategy-stats">
+                        <div class="stat-item">
+                            <strong>{{ status.strategies.gold_silver_strategy.daily_trades }}</strong><br>
+                            <small>Heute Trades</small>
+                        </div>
+                        <div class="stat-item">
+                            <strong>7.5%</strong><br>
+                            <small>Position Size</small>
+                        </div>
+                        <div class="stat-item">
+                            <strong>{{ "%.0f"|format(status.strategies.gold_silver_strategy.last_trade_minutes_ago) }}min</strong><br>
+                            <small>Letzter Trade</small>
+                        </div>
+                    </div>
+                    {% endif %}
+                    <p class="small-text">Demo - Account 1 | Kleinere TP für mehr Trades</p>
                 </div>
             </div>
         </div>
         
         <!-- Recent Trades -->
         <div class="trades-section">
-            <h2>Recent Trades</h2>
+            <h2>📋 Recent Trades</h2>
             {% if status.recent_trades %}
-                {% for trade in status.recent_trades[-5:] %}
+                {% for trade in status.recent_trades[-8:] %}
                 <div class="trade-item trade-{{ trade.action.lower() }}">
                     <strong>{{ trade.ticker }} - {{ trade.action }}</strong>
                     <span class="small-text">({{ trade.strategy }})</span><br>
@@ -2031,8 +2460,14 @@ DASHBOARD_HTML = """
         </div>
         
         <div class="footer">
-            <p>&copy; {{ now.year }} Dual-Strategy Trading Bot - Nur für Demo-Accounts</p>
-            <p class="small-text">Letztes Update: {{ status.last_update or 'Noch nicht' }}</p>
+            <p>&copy; {{ now.year }} Dual-Strategy Trading Bot v2.0 - Nur für Demo-Accounts</p>
+            <p class="small-text">Letztes Update: {{ status.last_update or 'Noch nicht' }} | 
+            {% if status.statistics.next_update_in_minutes < 5 %}
+                <span class="status-warning">Nächstes Update in {{ "%.1f"|format(status.statistics.next_update_in_minutes) }} Minuten</span>
+            {% else %}
+                Nächstes Update in {{ "%.1f"|format(status.statistics.next_update_in_minutes) }} Minuten
+            {% endif %}
+            </p>
         </div>
     </div>
 </body>
@@ -2042,9 +2477,10 @@ DASHBOARD_HTML = """
 # FLASK ROUTES
 @app.route("/")
 def dashboard():
-    """Haupt-Dashboard"""
+    """Haupt-Dashboard mit Enhanced UI"""
     try:
         bot = initialize_bot()
+        
         if bot:
             status = bot.get_comprehensive_status()
         else:
@@ -2076,6 +2512,11 @@ def dashboard():
                 'strategies': {
                     'main_strategy_active': False,
                     'gold_silver_active': False
+                },
+                'statistics': {
+                    'next_update_in_minutes': 0,
+                    'restart_count': 0,
+                    'health_checks': 0
                 }
             }
         
@@ -2086,19 +2527,24 @@ def dashboard():
             timestamp=now.strftime("%Y-%m-%d %H:%M:%S"),
             now=now
         )
-        
+    
     except Exception as e:
         logger.error(f"Dashboard Fehler: {e}\n{traceback.format_exc()}")
         return f"""
         <html>
         <head><title>Dashboard Error</title></head>
-        <body>
-        <h1>Dashboard Fehler</h1>
+        <body style="font-family: Arial; padding: 20px; background: #f5f5f5;">
+        <h1 style="color: #e74c3c;">Dashboard Fehler</h1>
         <p><strong>Fehler:</strong> {str(e)}</p>
         <p><strong>Zeit:</strong> {datetime.now()}</p>
         <hr>
         <p>Prüfe die Logs für weitere Details.</p>
-        <a href="/">Dashboard neu laden</a>
+        <a href="/" style="background: #3498db; color: white; padding: 10px 15px; text-decoration: none; border-radius: 5px;">Dashboard neu laden</a>
+        <br><br>
+        <details>
+        <summary>Technische Details</summary>
+        <pre style="background: #2c3e50; color: #ecf0f1; padding: 10px; border-radius: 5px; overflow-x: auto;">{traceback.format_exc()}</pre>
+        </details>
         </body>
         </html>
         """, 500
@@ -2141,9 +2587,10 @@ def force_analysis():
         return jsonify({
             "success": success,
             "message": "Analyse durchgeführt" if success else "Analyse fehlgeschlagen (möglicherweise außerhalb Handelszeiten)",
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "next_scheduled": (datetime.now() + timedelta(minutes=bot.update_interval//60)).isoformat()
         })
-        
+    
     except Exception as e:
         logger.error(f"Manuelle Analyse Fehler: {e}")
         return jsonify({
@@ -2175,6 +2622,8 @@ def api_positions():
             return jsonify({
                 "positions": bot.current_status['active_positions'],
                 "count": len(bot.current_status['active_positions']),
+                "main_account_positions": [p for p in bot.current_status['active_positions'] if p.get('account_type') == 'demo_main'],
+                "gold_account_positions": [p for p in bot.current_status['active_positions'] if p.get('account_type') == 'demo_account1'],
                 "timestamp": datetime.now().isoformat()
             })
         else:
@@ -2189,9 +2638,13 @@ def api_recent_trades():
     try:
         bot = initialize_bot()
         if bot:
+            recent_trades = bot.current_status['recent_trades'][-15:]  # Letzte 15
+            
             return jsonify({
-                "trades": bot.current_status['recent_trades'][-10:],  # Letzte 10
+                "trades": recent_trades,
                 "total_trades": bot.trade_count,
+                "main_strategy_trades": len([t for t in recent_trades if t.get('strategy') == 'main']),
+                "gold_silver_trades": len([t for t in recent_trades if 'gold_silver' in t.get('strategy', '')]),
                 "timestamp": datetime.now().isoformat()
             })
         else:
@@ -2200,18 +2653,65 @@ def api_recent_trades():
         logger.error(f"Recent Trades API Fehler: {e}")
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/restart-bot", methods=["POST"])
+def restart_bot():
+    """Bot-Restart API Endpoint (für Emergency Cases)"""
+    try:
+        bot = initialize_bot()
+        if bot:
+            logger.info("Manueller Bot-Restart angefordert")
+            bot.restart_apis()
+            
+            return jsonify({
+                "success": True,
+                "message": "Bot-Restart durchgeführt",
+                "restart_count": bot.restart_count,
+                "timestamp": datetime.now().isoformat()
+            })
+        else:
+            return jsonify({"error": "Bot nicht verfügbar"}), 500
+    
+    except Exception as e:
+        logger.error(f"Bot Restart Fehler: {e}")
+        return jsonify({
+            "error": "Restart fehlgeschlagen",
+            "details": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
 @app.route("/health")
 def health_check():
-    """Health Check für Render"""
+    """Enhanced Health Check für Render"""
     try:
         bot = initialize_bot()
         is_healthy = bot is not None
-        return jsonify({
+        
+        # Zusätzliche Health Metrics
+        health_data = {
             "status": "healthy" if is_healthy else "unhealthy",
             "bot_running": bot.running if bot else False,
             "timestamp": datetime.now().isoformat(),
             "uptime_hours": (datetime.now() - bot.start_time).total_seconds() / 3600 if bot else 0
-        }), 200 if is_healthy else 503
+        }
+        
+        if is_healthy:
+            health_data.update({
+                "api_status": {
+                    "main_api": bot.main_api is not None and bot.main_api.is_authenticated(),
+                    "gold_api": bot.gold_api is not None and bot.gold_api.is_authenticated()
+                },
+                "statistics": {
+                    "analysis_count": bot.analysis_count,
+                    "trade_count": bot.trade_count,
+                    "error_count": bot.error_count,
+                    "restart_count": bot.restart_count,
+                    "health_checks": bot.health_check_count
+                },
+                "last_update_minutes_ago": (time.time() - bot.last_update_time) / 60 if bot.last_update_time > 0 else 999
+            })
+        
+        return jsonify(health_data), 200 if is_healthy else 503
+    
     except Exception as e:
         return jsonify({
             "status": "error",
@@ -2221,7 +2721,7 @@ def health_check():
 
 @app.route("/logs")
 def view_logs():
-    """Einfache Log-Ansicht (für Debugging)"""
+    """Enhanced Log-Ansicht"""
     try:
         if not os.path.exists('trading_bot.log'):
             return "<h1>Keine Log-Datei gefunden</h1>"
@@ -2229,25 +2729,56 @@ def view_logs():
         with open('trading_bot.log', 'r') as f:
             lines = f.readlines()
         
-        # Nur letzte 100 Zeilen
-        recent_lines = lines[-100:] if len(lines) > 100 else lines
+        # Nur letzte 150 Zeilen (mehr für bessere Übersicht)
+        recent_lines = lines[-150:] if len(lines) > 150 else lines
         
         log_html = f"""
         <html>
         <head>
-            <title>Trading Bot Logs</title>
+            <title>Trading Bot Logs v2.0</title>
             <style>
-                body {{ font-family: monospace; background: #1e1e1e; color: #d4d4d4; padding: 20px; }}
-                .log-line {{ margin: 2px 0; }}
-                .error {{ color: #f44747; }}
+                body {{ font-family: 'Consolas', 'Monaco', monospace; background: #1e1e1e; color: #d4d4d4; padding: 20px; line-height: 1.4; }}
+                .log-line {{ margin: 1px 0; padding: 2px 0; }}
+                .error {{ color: #f44747; font-weight: bold; }}
                 .warning {{ color: #ffcc02; }}
                 .info {{ color: #4fc1ff; }}
+                .success {{ color: #4CAF50; }}
+                .header {{ background: #2d2d30; padding: 15px; margin-bottom: 15px; border-radius: 8px; }}
+                .filter-buttons {{ margin: 15px 0; }}
+                .filter-btn {{ 
+                    background: #007acc; color: white; border: none; padding: 8px 15px; 
+                    margin: 0 5px; border-radius: 4px; cursor: pointer; 
+                }}
+                .filter-btn:hover {{ background: #005999; }}
+                .timestamp {{ color: #808080; }}
             </style>
+            <script>
+            function filterLogs(type) {{
+                const lines = document.querySelectorAll('.log-line');
+                lines.forEach(line => {{
+                    if (type === 'all' || line.classList.contains(type)) {{
+                        line.style.display = 'block';
+                    }} else {{
+                        line.style.display = 'none';
+                    }}
+                }});
+            }}
+            </script>
         </head>
         <body>
-            <h1>Trading Bot Logs (Letzte {len(recent_lines)} Zeilen)</h1>
-            <p>Letzte Aktualisierung: {datetime.now()}</p>
-            <hr>
+            <div class="header">
+                <h1>🤖 Trading Bot Logs v2.0 (Letzte {len(recent_lines)} Zeilen)</h1>
+                <p>Letzte Aktualisierung: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+            </div>
+            
+            <div class="filter-buttons">
+                <button class="filter-btn" onclick="filterLogs('all')">Alle anzeigen</button>
+                <button class="filter-btn" onclick="filterLogs('error')">Nur Fehler</button>
+                <button class="filter-btn" onclick="filterLogs('warning')">Nur Warnungen</button>
+                <button class="filter-btn" onclick="filterLogs('info')">Nur Info</button>
+                <button class="filter-btn" onclick="filterLogs('success')">Nur Erfolg</button>
+            </div>
+            
             <div>
         """
         
@@ -2259,19 +2790,32 @@ def view_logs():
                 css_class = "warning"
             elif "INFO" in line:
                 css_class = "info"
+            elif any(keyword in line for keyword in ["erfolgreich", "SUCCESS", "✅", "abgeschlossen"]):
+                css_class = "success"
+            
             log_html += f'<div class="log-line {css_class}">{line.strip()}</div>'
         
         log_html += """
             </div>
-            <hr>
-            <p><a href="/">Zurück zum Dashboard</a> | <a href="/logs">Logs aktualisieren</a></p>
+            <hr style="margin: 20px 0;">
+            <p style="text-align: center;">
+                <a href="/" style="color: #4fc1ff;">Zurück zum Dashboard</a> | 
+                <a href="/logs" style="color: #4fc1ff;">Logs aktualisieren</a> |
+                <a href="/health" style="color: #4fc1ff;">Health Check</a>
+            </p>
         </body>
         </html>
         """
-        return log_html
         
+        return log_html
+    
     except Exception as e:
-        return f"<h1>Log-Anzeige Fehler</h1><p>{str(e)}</p>"
+        return f"""
+        <html><head><title>Log Error</title></head><body style="font-family: Arial; padding: 20px;">
+        <h1>Log-Anzeige Fehler</h1><p>{str(e)}</p>
+        <a href="/">Zurück zum Dashboard</a>
+        </body></html>
+        """
 
 # ERROR HANDLERS
 @app.errorhandler(404)
@@ -2279,8 +2823,9 @@ def not_found(error):
     return jsonify({
         "error": "Endpoint nicht gefunden",
         "available_endpoints": [
-            "/", "/api/status", "/api/trading-hours",
-            "/api/positions", "/health", "/logs"
+            "/", "/api/status", "/api/trading-hours", "/api/positions", 
+            "/api/recent-trades", "/api/force-analysis", "/api/restart-bot",
+            "/health", "/logs"
         ]
     }), 404
 
@@ -2293,9 +2838,9 @@ def internal_error(error):
 
 # STARTUP LOGIC
 def startup_checks():
-    """Startup-Validierungen"""
-    logger.info("Trading Bot startet...")
-    logger.info("="*60)
+    """Enhanced Startup-Validierungen"""
+    logger.info("Trading Bot v2.0 startet...")
+    logger.info("="*70)
     
     # Environment-Variablen prüfen
     required_vars = ['CAPITAL_API_KEY', 'CAPITAL_PASSWORD', 'CAPITAL_EMAIL']
@@ -2313,7 +2858,7 @@ def startup_checks():
         return False
     
     # Konfiguration loggen
-    logger.info("Konfiguration:")
+    logger.info("🔧 Konfiguration:")
     logger.info(f"   Trading Enabled: {os.getenv('TRADING_ENABLED', 'true')}")
     logger.info(f"   Update Interval: {os.getenv('UPDATE_INTERVAL_MINUTES', 20)} Minuten")
     logger.info(f"   Debug Mode: {os.getenv('DEBUG_MODE', 'false')}")
@@ -2321,11 +2866,20 @@ def startup_checks():
     
     # Render-spezifische Checks
     if os.getenv('RENDER'):
-        logger.info("Render Environment erkannt")
+        logger.info("🌐 Render Environment erkannt")
         logger.info(f"   Port: {os.getenv('PORT', '10000')}")
         logger.info(f"   Service: {os.getenv('RENDER_SERVICE_NAME', 'Unknown')}")
+        logger.info("   Enhanced Stability Features aktiviert")
     
-    logger.info("="*60)
+    # Feature-Summary
+    logger.info("✨ v2.0 Features:")
+    logger.info("   • Aktienstrategie: Aggressivere Parameter für mehr Trades")
+    logger.info("   • Gold/Silver: 7.5% Position Size mit kleineren TPs")
+    logger.info("   • Error Recovery: Position-Sync nach manuellen Änderungen")
+    logger.info("   • Render Stability: Health Checks und Auto-Restart")
+    logger.info("   • Enhanced Dashboard mit mehr Statistiken")
+    
+    logger.info("="*70)
     return True
 
 def main():
@@ -2346,17 +2900,20 @@ def main():
         # Flask App starten
         port = int(os.getenv("PORT", 5000))
         logger.info(f"Flask App startet auf Port {port}")
+        
         app.run(
             host="0.0.0.0",
             port=port,
             debug=os.getenv('DEBUG_MODE', 'false').lower() == 'true',
             threaded=True
         )
+    
     except KeyboardInterrupt:
         logger.info("Manueller Stopp durch Benutzer")
         if bot:
             bot.stop_auto_trading()
         return 0
+    
     except Exception as e:
         logger.error(f"Unerwarteter Fehler: {e}")
         return 1
@@ -2403,4 +2960,4 @@ signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
 atexit.register(cleanup_on_exit)
 
-logger.info("Trading Bot Module geladen - bereit für Deployment!")
+logger.info("Trading Bot v2.0 Module geladen - bereit für Deployment!")
