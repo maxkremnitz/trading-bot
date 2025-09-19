@@ -587,9 +587,9 @@ class CapitalComAPI:
             }
             
             if stop_distance:
-                order_data['stopDistance'] = max(10, int(stop_distance))
+                order_data['stopDistance'] = max(50, int(stop_distance))
             if profit_distance:
-                order_data['profitDistance'] = max(10, int(profit_distance))
+                order_data['profitDistance'] = max(50, int(profit_distance))
             
             logger.info(f"Order: {epic} {direction} Size: {size}")
             
@@ -922,8 +922,9 @@ class MainTradingStrategy:
                             stop_loss = current_price * (1 + sl_percent/100)
                             take_profit = current_price * (1 - tp_percent/100)
                         
-                        stop_distance = max(20, int(abs(current_price - stop_loss) * 100))
-                        profit_distance = max(20, int(abs(take_profit - current_price) * 100))
+                        # FIXED: Höhere Stop Loss Distance für Capital.com
+                        stop_distance = max(50, int(abs(current_price - stop_loss)))
+                        profit_distance = max(50, int(abs(take_profit - current_price)))
                         
                         signal = {
                             'ticker': ticker,
@@ -977,8 +978,8 @@ class MainTradingStrategy:
                         'current_price': current_price,
                         'stop_loss': current_price * 0.99,  # 1% SL
                         'take_profit': current_price * 1.015,  # 1.5% TP
-                        'stop_distance': max(20, int(current_price * 0.01 * 100)),
-                        'profit_distance': max(20, int(current_price * 0.015 * 100)),
+                        'stop_distance': max(50, int(current_price * 0.01)),
+                        'profit_distance': max(50, int(current_price * 0.015)),
                         'position_size': 0.5,  # Kleine Size für Forced Trade
                         'strategy': f"{self.name} (Forced)"
                     }
@@ -1872,7 +1873,7 @@ DASHBOARD_HTML = """
             <div class="card">
                 <h3>Gold/Silver (7.5%)</h3>
                 <p class="value">${{ "%.0f"|format(status.gold_silver_prices.gold_price) }} / ${{ "%.1f"|format(status.gold_silver_prices.silver_price) }}</p>
-                <small>Heute: {{ status.strategies.gold_silver_strategy.daily_trades }} Trades</small>
+                <small>Heute: {{ status.get('strategies', {}).get('gold_silver_strategy', {}).get('daily_trades', 0) }} Trades</small>
             </div>
             {% endif %}
             
