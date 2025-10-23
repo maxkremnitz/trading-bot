@@ -40,10 +40,33 @@ logger = logging.getLogger(__name__)
 def cleanup_memory():
     """Aggressive Memory Cleanup für Render"""
     try:
+        import gc
+        import sys
+        
+        # Standard Cleanup
         gc.collect()
-        # Clear matplotlib cache
+        
+        # Matplotlib cleanup
         if 'matplotlib.pyplot' in sys.modules:
             plt.close('all')
+            plt.clf()
+            plt.cla()
+        
+        # Pandas cleanup
+        if hasattr(pd, 'options'):
+            pd.options.mode.chained_assignment = None
+        
+        # YFinance cache cleanup
+        if 'yfinance' in sys.modules:
+            import yfinance as yf
+            if hasattr(yf, 'cache'):
+                yf.cache.clear()
+        
+        # Force garbage collection
+        for i in range(3):
+            gc.collect()
+            
+        logger.info("Aggressive memory cleanup completed")
         return True
     except Exception as e:
         logger.error(f"Memory cleanup error: {e}")
@@ -1225,7 +1248,13 @@ class TradingBotController:
             'last_analysis': None,
             'active_positions': [],
             'recent_trades': []
-        }
+        } 
+               # Keep-Alive für Render
+        if os.getenv('RENDER'):
+            from keep_alive import RenderKeepAlive
+            self.keep_alive = RenderKeepAlive()
+        else:
+            self.keep_alive = None
         
         logger.info("Trading Bot Controller initialisiert")
     
@@ -1341,31 +1370,37 @@ class TradingBotController:
         return trading_status['analysis_allowed']
     
     def start_auto_trading(self):
-        """Auto-Trading starten"""
-        try:
-            if self.running:
-                logger.info("Auto-Trading läuft bereits")
-                return True
-            
-            logger.info("Auto-Trading wird gestartet...")
-            
-            if not self.initialize_apis():
-                logger.error("API Init fehlgeschlagen")
-                return False
-            
-            self.running = True
-            
-            if self.update_thread is None or not self.update_thread.is_alive():
-                self.update_thread = threading.Thread(target=self._auto_trading_loop, daemon=True)
-                self.update_thread.start()
-                logger.info("Auto-Trading Thread gestartet")
-            
+    """Auto-Trading starten (Render-optimiert)"""
+    try:
+        if self.running:
+            logger.info("Auto-Trading läuft bereits")
             return True
-        
-        except Exception as e:
-            logger.error(f"Auto-Trading Start Error: {e}")
-            self.running = False
+            
+        logger.info("Auto-Trading wird gestartet...")
+        if not self.initialize_apis():
+            logger.error("API Init fehlgeschlagen")
             return False
+        
+        self.running = True
+        
+        # Keep-Alive für Render starten
+        if os.getenv('RENDER'):
+            self.keep_alive.start()
+        
+        # NON-daemon Thread für bessere Kontrolle
+        if self.update_thread is None or not self.update_thread.is_alive():
+            self.update_thread = threading.Thread(
+                target=self._auto_trading_loop, 
+                daemon=False  # ÄNDERUNG: Nicht daemon
+            )
+            self.update_thread.start()
+            logger.info("Auto-Trading Thread gestartet")
+            
+        return True
+    except Exception as e:
+        logger.error(f"Auto-Trading Start Error: {e}")
+        self.running = False
+        return False
     
     def _auto_trading_loop(self):
         """Main Trading Loop mit Memory Management"""
@@ -1610,13 +1645,21 @@ class TradingBotController:
             logger.error(f"Update Positions Error: {e}")
     
     def stop_auto_trading(self):
-        """Trading stoppen"""
-        if self.running:
-            logger.info("Stoppe Auto-Trading...")
-            self.running = False
-            if self.update_thread and self.update_thread.is_alive():
-                self.update_thread.join(timeout=5)
-            logger.info("Auto-Trading gestoppt")
+    """Trading stoppen (Render-safe)"""
+    if self.running:
+        logger.info("Stoppe Auto-Trading...")
+        self.running = False
+        
+        # Keep-Alive stoppen
+        if hasattr(self, 'keep_alive'):
+            self.keep_alive.stop()
+            
+        if self.update_thread and self.update_thread.is_alive():
+            self.update_thread.join(timeout=10)  # Längerer Timeout
+            
+        # Aggressive Cleanup
+        cleanup_memory()
+        logger.info("Auto-Trading gestoppt")
     
     def get_comprehensive_status(self):
         """Status für Dashboard"""
@@ -2227,19 +2270,34 @@ if __name__ == "__main__":
     # Local development
     exit(main())
 else:
-    # Render/WSGI - Automatic initialization
+    # Render/WSGI - Optimierte Initialization
     logger.info("WSGI/Render environment detected")
     if startup_checks():
         try:
-            # Initialize bot for WSGI
+            # Memory cleanup vor Bot-Init
+            cleanup_memory()
+            
             with app.app_context():
-                initialize_bot()
-                logger.info("Bot successfully initialized for WSGI/Render")
+                bot = initialize_bot()
+                if bot:
+                    logger.info("Bot successfully initialized for WSGI/Render")
+                    # Render-spezifische Initialisierung
+                    if os.getenv('RENDER'):
+                        # Worker-Restart Counter
+                        restart_file = '/tmp/worker_restart_count'
+                        try:
+                            with open(restart_file, 'r') as f:
+                                count = int(f.read().strip())
+                        except:
+                            count = 0
+                        count += 1
+                        with open(restart_file, 'w') as f:
+                            f.write(str(count))
+                        logger.info(f"Worker restart #{count}")
+                else:
+                    logger.error("Bot initialization failed for WSGI/Render")
         except Exception as e:
             logger.error(f"WSGI Bot initialization error: {e}")
-        logger.info("Flask app ready for WSGI/Render")
-    else:
-        logger.error("Startup checks failed for WSGI/Render")
 
 # GRACEFUL SHUTDOWN
 import signal
