@@ -1,32 +1,30 @@
-# 🚂 Trading Bot - Dual Strategy System
+# Gold/Silver Trading Bot - Render Optimized
 
-Automatischer Trading Bot mit zwei separaten Strategien und Handelszeitenbeschränkung.
+Ein automatisierter Trading Bot für Gold-Trading basierend auf Silver-Preisbewegungen, optimiert für Render Free Tier mit Cron Jobs.
 
-## 🎯 **Strategien:**
-1. **Hauptstrategie** (Technical Analysis) → **Standard Demo Account**  
-2. **Gold/Silver Test** (Correlation Strategy) → **Demo - Account 1**
+## 🚀 Features
 
-## ⚙️ **Features:**
-- ✅ **Handelszeitenbeschränkung** (nur während NYSE/XETRA/FOREX Zeiten)
-- ✅ **Dual-Account System** mit automatischem Account-Switching
-- ✅ **Capital.com API Integration** (vollständig nach Dokumentation)
-- ✅ **20-Minuten Update-Intervall** 
-- ✅ **Flask Web Dashboard** mit Live-Status
-- ✅ **SQLite Persistierung** für Trade-History
-- ✅ **Rate Limiting** und Error Handling
+- **Dual-Account System**: Konservative Strategie (Account 1) und aggressive Strategie (Account 2)
+- **Render-optimiert**: Läuft als Cron Job statt kontinuierlicher Service
+- **Erweiterte Analyse**: Momentum-Indikator + RSI + Gold/Silver-Ratio
+- **Memory-effizient**: Keine Memory-Leaks oder Timeouts
+- **Automatische Trades**: Via Capital.com Demo API
 
-## 🔧 **Setup:**
+## 📊 Trading-Strategie
 
-### **1. Capital.com API Keys erstellen:**
-1. Einloggen bei Capital.com (Demo Account)
-2. Settings → API Integrations
-3. Generate API Key erstellen
-4. API Key + Custom Password notieren
+### Account 1 (Konservativ)
+- Position Size: 5% des Kapitals
+- Höhere Schwellenwerte für Signale
+- Geeignet für risikoaverse Ansätze
 
-### **2. Environment Variablen (in Render setzen):**
+### Account 2 (Aggressiv)  
+- Position Size: 10% des Kapitals
+- Niedrigere Schwellenwerte für Signale
+- Mehr Trading-Opportunitäten
+
+## 🛠️ Setup
+
+### 1. GitHub Repository
 ```bash
-CAPITAL_API_KEY=dein_api_key_hier
-CAPITAL_PASSWORD=dein_custom_password
-CAPITAL_EMAIL=deine_email@example.com
-TRADING_ENABLED=true
-UPDATE_INTERVAL_MINUTES=20
+git clone https://github.com/YOUR_USERNAME/gold-silver-bot.git
+cd gold-silver-bot
