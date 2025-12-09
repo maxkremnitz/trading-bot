@@ -1,0 +1,46 @@
+services:
+  - type: cron
+    name: gold-silver-analyzer-account1
+    env: python
+    schedule: "*/30 * * * *"  # Alle 30 Minuten
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python run_analysis.py"
+    envVars:
+      - key: CAPITAL_API_KEY
+        sync: false
+      - key: CAPITAL_PASSWORD
+        sync: false
+      - key: CAPITAL_EMAIL
+        sync: false
+      - key: ACCOUNT_TYPE
+        value: account1
+      - key: RENDER_SERVICE_NAME
+        value: gold-silver-analyzer-account1
+    
+  - type: cron
+    name: gold-silver-analyzer-account2
+    env: python
+    schedule: "*/30 * * * *"  # Alle 30 Minuten
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python run_analysis.py"
+    envVars:
+      - key: CAPITAL_API_KEY
+        sync: false
+      - key: CAPITAL_PASSWORD
+        sync: false
+      - key: CAPITAL_EMAIL
+        sync: false
+      - key: ACCOUNT_TYPE
+        value: account2
+      - key: RENDER_SERVICE_NAME
+        value: gold-silver-analyzer-account2
+
+  # Optional: Web Service für Monitoring
+  - type: web
+    name: gold-silver-dashboard
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn dashboard:app"
+    envVars:
+      - key: RENDER_SERVICE_NAME
+        value: gold-silver-dashboard
